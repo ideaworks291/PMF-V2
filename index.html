@@ -54,8 +54,8 @@ const STORE_PRESETS = {
     outSize: 1200
   },
 
-  // ---- (?store=satchiura) ---- 初期設定は石川小松店(ishikawa)と同じ内容で作成
-  satchiura: {
+  // ---- 横浜(幸浦) (?store=yokohama) ---- 初期設定は石川小松店(ishikawa)と同じ内容で作成
+  yokohama: {
     autoCorrectEnabled: true,
     bgAnchorMode: true,
     bgTargetLevel: 180,
@@ -65,7 +65,7 @@ const STORE_PRESETS = {
     fixedNamingPrefix: null,
     fixedNamingWidth: 3,
     fixedNamingStartNum: 1,
-    zipFileNamePrefix: 'satchiura_',
+    zipFileNamePrefix: 'yokohama_',
     outSize: 1200
   }
 
@@ -88,16 +88,16 @@ const STORE_PRESETS = {
 
 // ---- ?store=が無い・該当キーが無い場合のフォールバック(汎用の初期値) ----
 const GENERIC_DEFAULT = {
-  autoCorrectEnabled: false,
+  autoCorrectEnabled: true,  // 自動補正あり・明るさ180が一番見やすいという判断により変更(以前はfalse/150)
   bgAnchorMode: true,
-  bgTargetLevel: 150,
+  bgTargetLevel: 180,
   bgColorMatch: false,
   gridColumns: null,
   cropAspectLockDefault: false,
   fixedNamingPrefix: null,
   fixedNamingWidth: 4,
   fixedNamingStartNum: 1,
-  zipFileNamePrefix: null,
+  zipFileNamePrefix: 'Photo_', // 未登録の店舗名でアクセスした場合のZIP名 → 例: Photo_0808_1430.zip
   outSize: 1200
 };
 
