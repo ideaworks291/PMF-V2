@@ -2201,14 +2201,25 @@ const BRANCH_DEFAULTS = (function(){
     trashGrid.appendChild(tile);
   }
 
-  function deleteItemWithUndo(item, card){
+  function deleteItemWithUndo(item, card, precomputedSiblings){
     // remember both neighbors, so restore can put it back in roughly the
     // same spot even if ONE of them has since been deleted or moved —
-    // only fall back to the end of the grid if BOTH are unavailable
-    const nextSibling = card.nextElementSibling;
-    const prevSibling = card.previousElementSibling;
-    const nextSiblingId = nextSibling ? nextSibling.dataset.id : null;
-    const prevSiblingId = (prevSibling && prevSibling.classList.contains('card')) ? prevSibling.dataset.id : null;
+    // only fall back to the end of the grid if BOTH are unavailable.
+    // precomputedSiblings lets a caller deleting SEVERAL photos at once
+    // (e.g. a merge) capture everyone's neighbors from the ORIGINAL,
+    // untouched grid up front — otherwise, computing this fresh for each
+    // photo as the batch progresses would see earlier deletions in the
+    // SAME batch as "gone", corrupting the recorded neighbor for anything
+    // that comes after in the loop.
+    let nextSiblingId, prevSiblingId;
+    if(precomputedSiblings){
+      ({nextSiblingId, prevSiblingId} = precomputedSiblings);
+    }else{
+      const nextSibling = card.nextElementSibling;
+      const prevSibling = card.previousElementSibling;
+      nextSiblingId = nextSibling ? nextSibling.dataset.id : null;
+      prevSiblingId = (prevSibling && prevSibling.classList.contains('card')) ? prevSibling.dataset.id : null;
+    }
 
     // if this photo had a drawn-but-unconfirmed crop range waiting on it
     // (independent of whatever else is happening, e.g. it's also being
@@ -2278,6 +2289,17 @@ const BRANCH_DEFAULTS = (function(){
     updateTrashPanelVisibility();
   }
 
+  // Restores several photos as ONE contiguous block, in the exact order
+  // given (which must already be their original grid order) — used for
+  // undoing a merge. restoreFromTrash() alone isn't safe for this: when
+  // several ADJACENT photos are deleted together, each one's stored
+  // prev/next-sibling reflects whatever was LEFT in the grid at the moment
+  // IT was deleted, which is often another photo from the SAME group that
+  // gets deleted moments later. Restoring one at a time off those stale
+  // sibling references can scatter the group instead of rebuilding it.
+  // Anchoring the whole block to just the FIRST photo's prev-sibling (which
+  // is guaranteed to be outside the group, since nothing before it in grid
+  // order belongs to this merge) sidesteps that entirely.
   trashClearAllBtn.addEventListener('click', async ()=>{
     if(!deletedItems.length) return;
     const ok = await askConfirm(`削除済みの${deletedItems.length}枚を完全に削除します。元に戻せなくなりますが、よろしいですか?`, '完全に削除する');
@@ -3755,8 +3777,32 @@ const BRANCH_DEFAULTS = (function(){
       await cacheProcessedResult(newItem);
       releaseFullResCanvas(newItem);
 
-      const mergedSourceIds = selected.map(item => item.id);
-      selected.forEach(item=>{
+      // Undo needs to restore these photos to their ORIGINAL individual
+      // positions — which, since merge selections aren't always adjacent
+      // (e.g. picking two photos of the same product that ended up apart
+      // in the grid), can mean scattered positions, not just one contiguous
+      // block. deleteItemWithUndo() normally captures each photo's
+      // prev/next-sibling AT THE MOMENT it's deleted — fine for a single
+      // delete, but wrong here: deleting several photos in one batch means
+      // each later deletion sees the EARLIER ones already gone, corrupting
+      // its recorded neighbor. So: capture every source photo's true
+      // neighbor from the CURRENT, untouched grid FIRST, before deleting
+      // anything, and hand that precomputed data to deleteItemWithUndo.
+      // Restoring each one later (in grid order, so any pair that WAS
+      // adjacent still cascades back together) then reconstructs the
+      // original layout exactly — scattered or not.
+      const sourcesByGridOrder = [...selected].sort((a,b)=> items.indexOf(a) - items.indexOf(b));
+      const mergedSourceIds = sourcesByGridOrder.map(item => item.id);
+      const siblingSnapshot = new Map(sourcesByGridOrder.map(item=>{
+        if(!item.cardEl) return [item.id, null];
+        const next = item.cardEl.nextElementSibling;
+        const prev = item.cardEl.previousElementSibling;
+        return [item.id, {
+          nextSiblingId: next ? next.dataset.id : null,
+          prevSiblingId: (prev && prev.classList.contains('card')) ? prev.dataset.id : null
+        }];
+      }));
+      sourcesByGridOrder.forEach(item=>{
         item.selectedForMerge = false;
         item.mergeOrder = null;
         if(item.cardEl){
@@ -3766,7 +3812,7 @@ const BRANCH_DEFAULTS = (function(){
           const mergeBadge = item.cardEl.querySelector('.merge-order-badge');
           if(mergeBadge) mergeBadge.style.display = 'none'; // same reasoning — refreshMergeOrderBadges() below can no longer reach this card once it's been moved to the trash
           try{
-            deleteItemWithUndo(item, item.cardEl);
+            deleteItemWithUndo(item, item.cardEl, siblingSnapshot.get(item.id));
           }catch(err){
             console.error('[merge] failed to move source photo to trash:', item.file && item.file.name, err);
           }
@@ -5424,7 +5470,12 @@ const BRANCH_DEFAULTS = (function(){
         updateCropUndoRedoButtons();
         return;
       }
-      // bring back every photo that was sent to the trash together...
+      // bring back every photo that was sent to the trash together. Each
+      // one's stored prev/next-sibling is now accurate even for a scattered
+      // (non-adjacent) merge selection, since the merge action snapshots
+      // everyone's true original neighbor BEFORE deleting any of them — so
+      // restoring one at a time (in grid order, so adjacent pairs cascade
+      // back together naturally) correctly rebuilds the original layout.
       entry.deletedIds.forEach(id => restoreFromTrash(id));
       // ...and if this was a merge, undo it fully by also removing the
       // synthesized merged photo it produced (reversibly, via the trash —
