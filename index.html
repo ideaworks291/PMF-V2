@@ -2139,28 +2139,17 @@ const BRANCH_DEFAULTS = (function(){
   // FLIP technique: capture each card's position before the reorder,
   // perform it, then animate from the old position to the new one so the
   // shuffle reads clearly instead of cards silently teleporting around.
+  // Previously used the FLIP technique (capture every card's position,
+  // mutate, then animate from old to new position) so the shuffle read
+  // clearly instead of cards silently teleporting. Dropped: this fires on
+  // every dragover as the dragged card crosses other cards — with 100+
+  // photos, calling getBoundingClientRect() on every card (forces a layout
+  // reflow) that often made dragging feel heavy, and the animation itself
+  // read as fussy rather than helpful. Snapping instantly (matching how
+  // Yahoo Auction's own listing screen reorders) is both lighter and reads
+  // as more direct/responsive.
   function animateGridReorder(mutate){
-    const cards = Array.from(grid.querySelectorAll('.card'));
-    const firstRects = new Map(cards.map(c => [c, c.getBoundingClientRect()]));
-
     mutate();
-
-    cards.forEach(c=>{
-      const first = firstRects.get(c);
-      const last = c.getBoundingClientRect();
-      const dx = first.left - last.left;
-      const dy = first.top - last.top;
-      if(dx === 0 && dy === 0) return;
-      c.style.transition = 'none';
-      c.style.transform = `translate(${dx}px, ${dy}px)`;
-      requestAnimationFrame(()=>{
-        c.style.transition = 'transform .22s ease, opacity .15s, border-color .15s';
-        c.style.transform = '';
-        setTimeout(()=>{
-          c.style.transition = '';
-        }, 240);
-      });
-    });
   }
 
   // --- delete with persistent trash panel (restore anytime, no time limit) ---
@@ -2509,9 +2498,8 @@ const BRANCH_DEFAULTS = (function(){
     setStatusLabel(item, '処理中…');
     try{
       process(item);
-      // does its own independent (higher-res) decode of the original file
-      // for better QR accuracy, but falls back to baseCanvas if that fails —
-      // so still needs to run before releaseFullResCanvas() frees that below
+      // reuses item.srcImg (already decoded above) — must run before
+      // releaseSrcImg()/releaseFullResCanvas() below free it
       await scanForMgmtQR(item);
       await cacheProcessedResult(item);
       releaseSrcImg(item);
@@ -3227,9 +3215,6 @@ const BRANCH_DEFAULTS = (function(){
 
   async function scanForMgmtQR(item){
     try{
-      // The main processing pipeline caps images at 1800px (balances memory
-      // and speed for brightness/crop work), so this scan re-decodes the
-      // ORIGINAL file separately rather than reusing that working canvas.
       // Counterintuitively, testing against real samples showed 1200px
       // decode BOTH faster AND more accurate than a larger 3200px cap —
       // very high resolution seems to work against these decoders on some
@@ -3237,23 +3222,41 @@ const BRANCH_DEFAULTS = (function(){
       // search), so this is tuned from measured results, not a guess.
       const QR_SCAN_MAX_DIM = 1200;
       let canvas = null;
-      let bitmap = null;
-      try{
-        bitmap = await createImageBitmap(item.file);
-      }catch(e){
-        bitmap = null; // e.g. HEIC on a browser that can't decode it natively — fall back below
-      }
-      if(bitmap){
-        const scale = Math.min(1, QR_SCAN_MAX_DIM / Math.max(bitmap.width, bitmap.height));
+
+      // item.srcImg is the SAME original file already decoded moments ago
+      // by decodeToWorkingBitmap() (at 1800px) — reuse that instead of
+      // decoding item.file from scratch a second time. createImageBitmap on
+      // a full-resolution camera photo (and especially the heic2any
+      // conversion it can trigger for HEIC) is genuinely expensive, so
+      // doing it twice per photo was pure waste; downscaling an
+      // already-decoded bitmap is comparatively very cheap.
+      if(item.srcImg && item.srcImg.width && item.srcImg.height){
+        const src = item.srcImg;
+        const scale = Math.min(1, QR_SCAN_MAX_DIM / Math.max(src.width, src.height));
         canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-        bitmap.close();
+        canvas.width = Math.max(1, Math.round(src.width * scale));
+        canvas.height = Math.max(1, Math.round(src.height * scale));
+        canvas.getContext('2d').drawImage(src, 0, 0, canvas.width, canvas.height);
       }else{
-        // fall back to whatever's already been decoded for the main
-        // pipeline — lower resolution, but better than not scanning at all
-        canvas = item.baseCanvas || item.processedCanvas;
+        // srcImg wasn't available for some reason — fall back to a fresh
+        // decode of the original file, same as before
+        let bitmap = null;
+        try{
+          bitmap = await createImageBitmap(item.file);
+        }catch(e){
+          bitmap = null; // e.g. HEIC on a browser that can't decode it natively — fall back below
+        }
+        if(bitmap){
+          const scale = Math.min(1, QR_SCAN_MAX_DIM / Math.max(bitmap.width, bitmap.height));
+          canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+          canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+          canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          bitmap.close();
+        }else{
+          // last resort — whatever's already been baked for the main pipeline
+          canvas = item.baseCanvas || item.processedCanvas;
+        }
       }
       if(!canvas || !canvas.width || !canvas.height) return;
       let text = null;
