@@ -497,6 +497,12 @@ const BRANCH_DEFAULTS = (function(){
     cursor:pointer;
     flex-shrink:0;
   }
+  .error-retry-reset-btn{
+    border-color:var(--text-dim);
+    color:var(--text-dim);
+    font-size:10px;
+    font-weight:400;
+  }
   .error-retry-btn:hover{background:var(--accent);color:#ffffff;}
   .card .meta{
     padding:8px 10px 4px;
@@ -1869,7 +1875,7 @@ const BRANCH_DEFAULTS = (function(){
         <span class="status-label">処理中…</span>
         <div class="badge-manualcrop" style="display:none;">手動トリミング済</div>
         <div class="badge-qr" style="display:none;"></div>
-        <div class="badge-overlimit" title="この商品はタグ写真込みで11枚(ヤフオクの1商品10枚制限)を超えています。結合などで枚数を減らしてください"></div>
+        <div class="badge-overlimit" title="タグ写真を除いた実際の使用枚数が、ヤフオクの1商品10枚制限を超えています。結合などで枚数を減らしてください"></div>
         <div class="rotate-controls">
           <button class="rotate-btn" data-dir="-1" title="反時計回りに90度回転" type="button"><svg viewBox="0 0 24 24" width="100%" height="100%"><path d="M17 3H5V9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 9L9 9L5 14Z" fill="currentColor" stroke="none"/><rect x="10" y="10" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
           <button class="rotate-btn" data-dir="1" title="時計回りに90度回転" type="button"><svg viewBox="0 0 24 24" width="100%" height="100%"><path d="M7 3H19V9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M23 9L15 9L19 14Z" fill="currentColor" stroke="none"/><rect x="2" y="10" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
@@ -2091,6 +2097,13 @@ const BRANCH_DEFAULTS = (function(){
       }
     });
     mgmtInputEl.addEventListener('keydown', (e)=>{
+      if(e.ctrlKey || e.metaKey || e.key === 'Control' || e.key === 'Meta'){
+        // モーダル側と同じ理由: この入力欄にフォーカスが残ったままだと、
+        // Ctrl+ドラッグでのクイックトリミングやAキーの縦横比ロック切替が
+        // 反応しない。Ctrlが押された時点でフォーカスを外す
+        mgmtInputEl.blur();
+        return;
+      }
       e.stopPropagation(); // keep A/C/Escape shortcuts from firing while typing here
       if(e.key === 'Enter') mgmtInputEl.blur();
     });
@@ -2295,6 +2308,22 @@ const BRANCH_DEFAULTS = (function(){
     updateEmptyMsg();
     updateMergeStatus();
     updateTrashPanelVisibility();
+
+    // a photo that was trashed while still in an error state would
+    // otherwise come back showing the exact same stale error overlay,
+    // relying on the person to notice and click "この写真だけ再読み込み"
+    // themselves — automatically retrying it here means restoring it is
+    // enough on its own, and sidesteps any issue with that button's click
+    // not registering for whatever reason after this particular sequence
+    if(item.hasError){
+      // use the "reset everything" variant, not a plain retry — if the
+      // person is restoring a photo that was ALREADY failing before they
+      // even deleted it, a plain retry has already been shown not to help
+      // (same broken per-item edit state, same result); resetting gives
+      // this its best real shot at recovering instead of failing the same
+      // way again silently
+      retryItem(item, {resetEdits:true});
+    }
   }
 
   // Restores several photos as ONE contiguous block, in the exact order
@@ -2585,10 +2614,24 @@ const BRANCH_DEFAULTS = (function(){
     retryBtn.textContent = 'この写真だけ再読み込み';
     retryBtn.addEventListener('click', ()=>retryItem(item));
     overlay.appendChild(retryBtn);
+    // A safety net for when the SAME error keeps coming back after a plain
+    // retry — most likely because something about this photo's own edit
+    // state (crop/blur/rotation/brightness overrides) is what's actually
+    // broken, and retryItem() alone doesn't touch any of that. Offered as a
+    // second, clearly-separate option rather than folded into the first
+    // button, since it's a more destructive action (discards this photo's
+    // edits) that shouldn't happen by accident.
+    const resetRetryBtn = document.createElement('button');
+    resetRetryBtn.type = 'button';
+    resetRetryBtn.className = 'error-retry-btn error-retry-reset-btn';
+    resetRetryBtn.textContent = '編集を全て取り消して再読み込み';
+    resetRetryBtn.title = 'トリミング・ぼかし・回転・明るさの個別設定をこの写真だけ元に戻してから、もう一度読み込み直します';
+    resetRetryBtn.addEventListener('click', ()=>retryItem(item, {resetEdits:true}));
+    overlay.appendChild(resetRetryBtn);
     updateStatus();
   }
 
-  function retryItem(item){
+  function retryItem(item, opts){
     const card = item.cardEl;
     item.hasError = false;
     item.included = true;
@@ -2605,6 +2648,19 @@ const BRANCH_DEFAULTS = (function(){
     item.baseCanvas = null;
     item.processedCanvas = null;
     item.cachedBlob = null;
+    if(opts && opts.resetEdits){
+      // last-resort recovery: if this photo's own edit state (rather than
+      // the file itself) is what's actually broken, a plain retry alone
+      // would just reprocess with the same bad values and fail again —
+      // this clears everything that's item-specific so it goes back to
+      // acting like a freshly-loaded photo
+      item.manualCrop = null;
+      item.blurRegions = [];
+      item.blurStrength = 15;
+      item.rotation = 0;
+      item.extraBoost = 1;
+      item.overrides = {bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null};
+    }
     setStatusLabel(item, '再読み込み中…');
     enqueueProcessing(item);
     updateStatus();
@@ -2690,11 +2746,24 @@ const BRANCH_DEFAULTS = (function(){
       const cy = Math.max(0, Math.round(mc.y * finalCanvas.height));
       const cw = Math.max(1, Math.min(finalCanvas.width - cx, Math.round(mc.w * finalCanvas.width)));
       const ch = Math.max(1, Math.min(finalCanvas.height - cy, Math.round(mc.h * finalCanvas.height)));
-      const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = cw;
-      croppedCanvas.height = ch;
-      croppedCanvas.getContext('2d').drawImage(finalCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
-      finalCanvas = croppedCanvas;
+      // A NaN/degenerate crop can end up stored on the item after certain
+      // rapid repeated crop/undo sequences (e.g. compounding a new crop's
+      // fraction against an already-tiny prior one). Without this check,
+      // such a photo would fail here EVERY time it's processed — including
+      // on retry, since retryItem() doesn't touch manualCrop — so clicking
+      // "この写真だけ再読み込み" would silently fail again and again with
+      // no visible change. Discarding the bad crop and continuing means the
+      // photo (and rest of the batch) recovers instead of getting stuck.
+      if(Number.isFinite(cx) && Number.isFinite(cy) && Number.isFinite(cw) && Number.isFinite(ch) && cw > 0 && ch > 0){
+        const croppedCanvas = document.createElement('canvas');
+        croppedCanvas.width = cw;
+        croppedCanvas.height = ch;
+        croppedCanvas.getContext('2d').drawImage(finalCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
+        finalCanvas = croppedCanvas;
+      }else{
+        console.error('[process] discarding invalid manualCrop:', item.file && item.file.name, mc);
+        item.manualCrop = null;
+      }
     }
 
     // 3b. apply blur regions (e.g. to hide serial numbers) — fractions are
@@ -2702,14 +2771,23 @@ const BRANCH_DEFAULTS = (function(){
     if(item.blurRegions && item.blurRegions.length){
       const fctx = finalCanvas.getContext('2d');
       const strength = item.blurStrength || 15;
+      const validRegions = [];
       item.blurRegions.forEach(region=>{
-        applyBlurToCanvas(finalCanvas, fctx, {
-          x: region.x * finalCanvas.width,
-          y: region.y * finalCanvas.height,
-          w: region.w * finalCanvas.width,
-          h: region.h * finalCanvas.height
-        }, strength);
+        const rx = region.x * finalCanvas.width;
+        const ry = region.y * finalCanvas.height;
+        const rw = region.w * finalCanvas.width;
+        const rh = region.h * finalCanvas.height;
+        // same reasoning as the manualCrop guard above — a degenerate
+        // region here would otherwise fail this photo's processing on
+        // every attempt, retry included
+        if(Number.isFinite(rx) && Number.isFinite(ry) && Number.isFinite(rw) && Number.isFinite(rh) && rw > 0 && rh > 0){
+          applyBlurToCanvas(finalCanvas, fctx, {x:rx, y:ry, w:rw, h:rh}, strength);
+          validRegions.push(region);
+        }else{
+          console.error('[process] discarding invalid blur region:', item.file && item.file.name, region);
+        }
       });
+      if(validRegions.length !== item.blurRegions.length) item.blurRegions = validRegions;
     }
 
     item.baseCanvas = finalCanvas;
@@ -3060,19 +3138,28 @@ const BRANCH_DEFAULTS = (function(){
   // individual shots than usual — it needs to be trimmed down, typically by
   // merging some of them into combined photos. Flagging it here means that
   // doesn't have to be counted by hand.
-  // Yahoo Auction listings cap out at 10 photos per product — but every
-  // group here also always includes its own QR tag photo (which doesn't
-  // count toward that limit), so the group size itself can run to 11
-  // before there's actually a problem. Flag it once it goes past that.
-  const MGMT_GROUP_PHOTO_LIMIT = 11;
+  // Yahoo Auction listings cap out at 10 photos per product. This counts
+  // only the photos that would actually be uploaded — the group's own QR
+  // tag photo is excluded from the tally, since it's an internal reference
+  // shot, not part of the listing itself.
+  const MGMT_GROUP_PHOTO_LIMIT = 10;
 
   function updateMgmtGroupStripes(){
-    // pass 1: tally how many photos are in each 管理番号 group
+    // pass 1: tally how many photos are in each 管理番号 group, and how
+    // many of those are the group's own QR tag photo (normally exactly
+    // one, but tallied rather than assumed in case of an edge case).
+    // Only counts photos with "使用する" checked — matches what the
+    // download-time over-limit check counts, so the badge shown here never
+    // disagrees with whether downloading actually gets blocked.
     const groupSizes = new Map();
+    const groupTagCounts = new Map();
     items.forEach(it=>{
       const num = it.mgmtNumber || '';
-      if(!num) return;
+      if(!num || !it.included) return;
       groupSizes.set(num, (groupSizes.get(num) || 0) + 1);
+      if(it.detectedMgmtNumber){
+        groupTagCounts.set(num, (groupTagCounts.get(num) || 0) + 1);
+      }
     });
 
     // pass 2: alternate the background per group, and flag any group over the limit
@@ -3091,14 +3178,15 @@ const BRANCH_DEFAULTS = (function(){
         useA = !useA;
         lastNumber = num;
       }
-      const groupSize = groupSizes.get(num);
-      const overLimit = groupSize > MGMT_GROUP_PHOTO_LIMIT;
+      const usableCount = (groupSizes.get(num) || 0) - (groupTagCounts.get(num) || 0);
+      const overBy = usableCount - MGMT_GROUP_PHOTO_LIMIT;
+      const overLimit = overBy > 0;
       it.cardEl.classList.toggle('mgmt-group-a', useA);
       it.cardEl.classList.toggle('mgmt-group-b', !useA);
       it.cardEl.classList.toggle('mgmt-group-overlimit', overLimit);
       if(overlimitBadge){
         overlimitBadge.style.display = overLimit ? 'block' : 'none';
-        if(overLimit) overlimitBadge.textContent = `${groupSize}枚`;
+        if(overLimit) overlimitBadge.textContent = `${overBy}枚オーバー`;
       }
     });
   }
@@ -3594,6 +3682,11 @@ const BRANCH_DEFAULTS = (function(){
   mgmtFloatApplyBtn.addEventListener('click', applyMgmtNumberToSelection);
   mgmtFloatClearBtn.addEventListener('click', clearMgmtSelection);
   mgmtFloatInput.addEventListener('keydown', (e)=>{
+    if(e.ctrlKey || e.metaKey || e.key === 'Control' || e.key === 'Meta'){
+      // 他の管理番号入力欄と同じ理由でフォーカスを解除
+      mgmtFloatInput.blur();
+      return;
+    }
     // Enter confirms — this is also what a barcode scanner sends after the
     // digits, so scanning into this field works with no extra clicks
     e.stopPropagation(); // keep A/C/Escape shortcuts from firing while typing here
@@ -3610,14 +3703,26 @@ const BRANCH_DEFAULTS = (function(){
   // item -> its 1-based position within its own group. Used at download time
   // so suffixes always run _01.._0N with no gaps, whatever happened earlier
   // (merges, deletions, reordering).
+  // Assigns each item's file-name suffix within its 管理番号 group: the
+  // confirmed anchor photo itself (QR-detected, or manually confirmed —
+  // see detectedMgmtNumber) gets "QR" instead of a number, so it's
+  // immediately recognizable in the file list regardless of whether that
+  // tag sits at the front or back of its group. Every OTHER photo in the
+  // group is numbered 01, 02, 03... in on-screen order, skipping over the
+  // anchor rather than counting it — so the numbering reads the same way
+  // whether the tag is 先頭固定 or 末尾固定.
   function computeMgmtSuffixMap(list){
     const counters = new Map();
     const result = new Map();
     list.forEach(it=>{
       const key = it.mgmtNumber || '';
+      if(it.detectedMgmtNumber){
+        result.set(it, 'QR');
+        return;
+      }
       const next = (counters.get(key) || 0) + 1;
       counters.set(key, next);
-      result.set(it, next);
+      result.set(it, String(next).padStart(2, '0'));
     });
     return result;
   }
@@ -4162,6 +4267,14 @@ const BRANCH_DEFAULTS = (function(){
     }
   });
   modalMgmtInput.addEventListener('keydown', (e)=>{
+    if(e.ctrlKey || e.metaKey || e.key === 'Control' || e.key === 'Meta'){
+      // Ctrl+ドラッグでのクイックトリミングや、Aキーでの縦横比ロック切替は、
+      // この入力欄にフォーカスが残ったままだと反応しない(下のstopPropagation
+      // がAキーなどを握りつぶしてしまうため)。Ctrlが押された時点でフォーカス
+      // を外し、以降のキー操作を通常通り機能させる
+      modalMgmtInput.blur();
+      return;
+    }
     e.stopPropagation(); // keep A/C/Escape/arrow-key shortcuts from firing while typing here
     if(e.key === 'Enter'){
       e.preventDefault();
@@ -4342,7 +4455,10 @@ const BRANCH_DEFAULTS = (function(){
     const isRangeSlider = active && active.tagName === 'INPUT' && active.type === 'range';
     if(active && active.tagName === 'INPUT' && !isRangeSlider) return;
 
-    if((e.key === 'a' || e.key === 'A') && !e.ctrlKey && !e.metaKey && !e.altKey){
+    // This tool has no "select all" feature of its own to protect, so
+    // Ctrl+A / ⌘+A are treated the same as a plain A press rather than
+    // being left to the browser's native select-all.
+    if((e.key === 'a' || e.key === 'A') && !e.altKey){
       if(e.repeat) return; // ignore OS key-repeat while held — otherwise a single press can fire this (and the reprocess it triggers) many times over
       // toggles both copies of the aspect-lock checkbox at once (main grid
       // + modal) — they're kept in sync everywhere else, so the shortcut
@@ -6166,6 +6282,28 @@ const BRANCH_DEFAULTS = (function(){
       return;
     }
 
+    // soft warning (unlike the missing-番号 check above, this one CAN be
+    // overridden) — occasionally the tag photo itself was never taken, in
+    // which case the group's real photo count can legitimately exceed 10
+    // with no practical way to merge it down, so blocking outright would be
+    // wrong here
+    const overLimitGroups = new Map(); // 管理番号 -> usable count
+    included.forEach(i=>{
+      const num = i.mgmtNumber || '';
+      if(!num) return;
+      if(!overLimitGroups.has(num)) overLimitGroups.set(num, 0);
+      if(!i.detectedMgmtNumber) overLimitGroups.set(num, overLimitGroups.get(num) + 1);
+    });
+    const overLimitList = [...overLimitGroups.entries()].filter(([,count])=> count > MGMT_GROUP_PHOTO_LIMIT);
+    if(overLimitList.length){
+      const summary = overLimitList.map(([num,count])=> `${num}: ${count}枚(${count-MGMT_GROUP_PHOTO_LIMIT}枚オーバー)`).join('\n');
+      const proceed = await askConfirm(
+        `ヤフオクの1商品10枚制限を超えている商品があります。\n\n${summary}\n\nこのままダウンロードしますか?`,
+        'このままダウンロード'
+      );
+      if(!proceed) return;
+    }
+
     // clear any error highlight left over from a previous blocked attempt
     included.forEach(i=>{
       if(i.cardEl){
@@ -6189,11 +6327,12 @@ const BRANCH_DEFAULTS = (function(){
       // export order — this must stay independent of which order items
       // actually finish decoding/encoding in once we process them concurrently
       function computeExportName(item, idx){
-        // 管理番号 + a per-group sequence: 3301234_01, 3301234_02, ...
-        // The suffix comes from mgmtSuffixMap, which counts positions within
-        // each 管理番号 group in the CURRENT grid order — so it stays gap-free
-        // even after merges or deletions removed photos from the middle.
-        const suffix = String(mgmtSuffixMap.get(item) || (idx+1)).padStart(2, '0');
+        // The suffix comes from mgmtSuffixMap: either "QR" for the group's
+        // confirmed tag photo, or a zero-padded sequence number ("01","02"…)
+        // for everything else — computed from the CURRENT grid order, so it
+        // stays gap-free even after merges or deletions removed photos from
+        // the middle.
+        const suffix = mgmtSuffixMap.get(item) || String(idx+1).padStart(2, '0');
         let name = sanitizeFileNamePart(item.mgmtNumber) + '_' + suffix + '.jpg';
         if(usedNames.has(name)){
           // shouldn't normally happen, but never silently overwrite an entry
