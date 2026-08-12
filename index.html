@@ -398,6 +398,12 @@ const BRANCH_DEFAULTS = (function(){
     opacity:.45;
     pointer-events:none;
   }
+  .grid.mgmt-locked .error-overlay{
+    /* a photo that's ALREADY failed isn't part of what's still being
+       scanned — letting the retry button stay clickable during the lock
+       means one bad photo doesn't force a wait for the rest of the batch */
+    pointer-events:auto;
+  }
   .mgmt-lock-hint{
     display:none;
     align-items:center;
@@ -425,6 +431,18 @@ const BRANCH_DEFAULTS = (function(){
   .card.excluded{opacity:.75;}
   .card.mgmt-group-a{background:rgba(56,189,248,.10);}
   .card.mgmt-group-b{background:rgba(245,166,35,.09);}
+  .card.mgmt-group-overlimit{
+    outline:2px solid #ef4444;
+    outline-offset:-2px;
+  }
+  .card .badge-overlimit{
+    position:absolute;top:6px;right:6px;
+    font-family:var(--mono);font-size:10px;font-weight:700;
+    background:rgba(239,68,68,.92);color:#fff;
+    padding:2px 6px;border-radius:3px;
+    z-index:5;
+    display:none;
+  }
   .card.excluded .imgbox img{filter:brightness(.32) saturate(.6);}
   .card.merge-selected{box-shadow:0 0 0 2px var(--accent);}
   .card .merge-chk{accent-color:var(--accent);width:15px;height:15px;}
@@ -1851,6 +1869,7 @@ const BRANCH_DEFAULTS = (function(){
         <span class="status-label">処理中…</span>
         <div class="badge-manualcrop" style="display:none;">手動トリミング済</div>
         <div class="badge-qr" style="display:none;"></div>
+        <div class="badge-overlimit" title="この商品はタグ写真込みで11枚(ヤフオクの1商品10枚制限)を超えています。結合などで枚数を減らしてください"></div>
         <div class="rotate-controls">
           <button class="rotate-btn" data-dir="-1" title="反時計回りに90度回転" type="button"><svg viewBox="0 0 24 24" width="100%" height="100%"><path d="M17 3H5V9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 9L9 9L5 14Z" fill="currentColor" stroke="none"/><rect x="10" y="10" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
           <button class="rotate-btn" data-dir="1" title="時計回りに90度回転" type="button"><svg viewBox="0 0 24 24" width="100%" height="100%"><path d="M7 3H19V9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M23 9L15 9L19 14Z" fill="currentColor" stroke="none"/><rect x="2" y="10" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
@@ -3036,22 +3055,51 @@ const BRANCH_DEFAULTS = (function(){
   // each group would need to handle L-shaped/wrapped regions, which gets
   // fiddly and fragile; a color alternation sidesteps that entirely).
   // Items with no 管理番号 yet get no tint, since "empty" isn't a group.
+  // Yahoo Auction listings cap out at 10 photos per product. Once a
+  // group (same 管理番号) exceeds that — commonly the tag photo plus more
+  // individual shots than usual — it needs to be trimmed down, typically by
+  // merging some of them into combined photos. Flagging it here means that
+  // doesn't have to be counted by hand.
+  // Yahoo Auction listings cap out at 10 photos per product — but every
+  // group here also always includes its own QR tag photo (which doesn't
+  // count toward that limit), so the group size itself can run to 11
+  // before there's actually a problem. Flag it once it goes past that.
+  const MGMT_GROUP_PHOTO_LIMIT = 11;
+
   function updateMgmtGroupStripes(){
+    // pass 1: tally how many photos are in each 管理番号 group
+    const groupSizes = new Map();
+    items.forEach(it=>{
+      const num = it.mgmtNumber || '';
+      if(!num) return;
+      groupSizes.set(num, (groupSizes.get(num) || 0) + 1);
+    });
+
+    // pass 2: alternate the background per group, and flag any group over the limit
     let lastNumber = null;
     let useA = true;
     items.forEach(it=>{
       if(!it.cardEl) return;
       const num = it.mgmtNumber || '';
+      const overlimitBadge = it.cardEl.querySelector('.badge-overlimit');
       if(!num){
-        it.cardEl.classList.remove('mgmt-group-a', 'mgmt-group-b');
+        it.cardEl.classList.remove('mgmt-group-a', 'mgmt-group-b', 'mgmt-group-overlimit');
+        if(overlimitBadge) overlimitBadge.style.display = 'none';
         return;
       }
       if(num !== lastNumber){
         useA = !useA;
         lastNumber = num;
       }
+      const groupSize = groupSizes.get(num);
+      const overLimit = groupSize > MGMT_GROUP_PHOTO_LIMIT;
       it.cardEl.classList.toggle('mgmt-group-a', useA);
       it.cardEl.classList.toggle('mgmt-group-b', !useA);
+      it.cardEl.classList.toggle('mgmt-group-overlimit', overLimit);
+      if(overlimitBadge){
+        overlimitBadge.style.display = overLimit ? 'block' : 'none';
+        if(overLimit) overlimitBadge.textContent = `${groupSize}枚`;
+      }
     });
   }
 
