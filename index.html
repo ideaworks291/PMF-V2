@@ -117,6 +117,7 @@ const BRANCH_DEFAULTS = (function(){
 <title>PLAYMART出品写真編集ツール</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%3E%0A%20%20%3Crect%20x%3D%224%22%20y%3D%2218%22%20width%3D%2256%22%20height%3D%2238%22%20rx%3D%228%22%20fill%3D%22%23C00081%22/%3E%0A%20%20%3Crect%20x%3D%2222%22%20y%3D%228%22%20width%3D%2220%22%20height%3D%2212%22%20rx%3D%223%22%20fill%3D%22%23C00081%22/%3E%0A%20%20%3Ccircle%20cx%3D%2232%22%20cy%3D%2238%22%20r%3D%2213%22%20fill%3D%22%2314181c%22/%3E%0A%20%20%3Ccircle%20cx%3D%2232%22%20cy%3D%2238%22%20r%3D%228%22%20fill%3D%22%23C00081%22/%3E%0A%20%20%3Ccircle%20cx%3D%2247%22%20cy%3D%2226%22%20r%3D%223%22%20fill%3D%22%2314181c%22/%3E%0A%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/encoding-japanese@2.2.0/encoding.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@undecaf/zbar-wasm@0.11.0/dist/index.js" crossorigin="anonymous"></script>
 <style>
@@ -1125,6 +1126,7 @@ const BRANCH_DEFAULTS = (function(){
 </style>
 </head>
 <body>
+<div id="app-version-badge" style="position:fixed;bottom:4px;right:8px;font-size:10px;color:#999;opacity:0.55;pointer-events:none;z-index:9999;font-family:monospace;">v2026.08.19</div>
 <div class="wrap">
 
   <header>
@@ -1136,7 +1138,7 @@ const BRANCH_DEFAULTS = (function(){
     <h2>1. 写真を読み込む</h2>
     <div class="drop" id="drop">
       <div><strong>クリックまたはドラッグ&ドロップ</strong>で複数枚まとめて読み込み</div>
-      <div style="margin-top:4px;font-size:12px;">JPEG / PNG / HEIC(iPhone) / ZIP(まとめて展開) 対応・複数選択可・最大500枚</div>
+      <div style="margin-top:4px;font-size:12px;">JPEG / PNG / HEIC(iPhone) / ZIP(まとめて展開) 対応・複数選択可・最大3000枚</div>
       <input type="file" id="fileInput" accept="image/*,.heic,.heif,.zip,application/zip" multiple>
     </div>
 
@@ -1217,6 +1219,15 @@ const BRANCH_DEFAULTS = (function(){
       </div>
     </div>
 
+    <div class="ctrl" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border, #333)">
+      <label for="csvInput">出品下書きジェネレーターのCSV（任意）</label>
+      <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:6px;">
+        読み込むと、管理番号が一致する行の画像列（画像1〜10）を自動で埋めて、CSVと写真をまとめてZIPに含めます。
+      </div>
+      <input type="file" id="csvInput" accept=".csv">
+      <div id="csvStatus" style="font-size:12px;margin-top:6px;color:var(--text-dim);"></div>
+    </div>
+
     <div class="btnrow">
       <button id="reprocessBtn">この設定で再処理</button>
       <button id="clearBtn">すべてクリア</button>
@@ -1259,6 +1270,10 @@ const BRANCH_DEFAULTS = (function(){
 
     <div class="grid" id="grid">
       <div class="empty" id="emptyMsg">まだ写真がありません</div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
+      <button id="mgmtFullReassignBtnBottom" type="button" title="漏れていた起点を手動で設定し終えた後などに、確定済みの起点(🏷が付いた写真)を基準に全ての番号を計算し直します。起点以外の写真は上書きされます">🔄 管理番号を再割当て</button>
     </div>
   </div>
 
@@ -1729,7 +1744,7 @@ const BRANCH_DEFAULTS = (function(){
     mgmtAutoAssignRanForThisBatch = false;
     files.forEach(f=>{
       const id = 'img'+(idSeq++);
-      const item = {id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null, included:true, rotation:0, manualCrop:null, blurRegions:[], blurStrength:15, extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null}};
+      const item = {id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null, included:true, rotation:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null}};
       items.push(item);
       renderCard(item);
       item.cardEl.classList.add('processing');
@@ -1883,7 +1898,7 @@ const BRANCH_DEFAULTS = (function(){
       </div>
       <div class="meta">
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-          <input type="checkbox" class="chk" checked> 使用する
+          <input type="checkbox" class="chk" checked> 使用
         </label>
         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;" title="結合対象として選択(チェックした順番で結合されます)">
           <input type="checkbox" class="merge-chk"> 結合<span class="merge-order-badge" style="display:none;"></span>
@@ -1904,6 +1919,18 @@ const BRANCH_DEFAULTS = (function(){
       refreshMergeOrderBadges();
       layoutManuallyChosen = false; // selection changed — a fresh auto-suggestion is welcome again
       updateMergeStatus();
+    });
+    card.querySelector('.merge-chk').addEventListener('keydown', e=>{
+      // 最後の1枚をチェックし終わった直後、チェックボックスにフォーカスが
+      // 残ったままEnter/スペースを押せば「結合を実行」ボタンを押したのと同じ動きにする。
+      // 結合を実行しない場合（枚数が揃っていない等でボタンが無効）は何もせず、
+      // スペースキーの標準動作（チェックのトグル）をそのまま生かす — ここで
+      // 無条件にpreventDefaultすると、1枚目を選ぶ際にスペースでチェックできなく
+      // なってしまう（マウスクリックでは問題ないが、キーボード操作が壊れる）。
+      if((e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') && !mergeRunBtn.disabled){
+        e.preventDefault();
+        mergeRunBtn.click();
+      }
     });
 
     card.querySelectorAll('.rotate-btn').forEach(btn=>{
@@ -2082,6 +2109,7 @@ const BRANCH_DEFAULTS = (function(){
     mgmtInputEl.classList.toggle('filled', !!item.mgmtNumber);
     let mgmtSnapshotAtFocus = null; // {mgmtNumber, detectedMgmtNumber} as they were when editing started
     mgmtInputEl.addEventListener('input', ()=>{
+      const wasDetected = !!item.detectedMgmtNumber;
       item.mgmtNumber = mgmtInputEl.value.trim();
       mgmtInputEl.classList.toggle('filled', !!item.mgmtNumber);
       // treat a manually-typed number the same as a successful QR read: it
@@ -2090,7 +2118,18 @@ const BRANCH_DEFAULTS = (function(){
       // scan gets flagged, without needing a separate "this is a tag" toggle
       item.detectedMgmtNumber = item.mgmtNumber || null;
       updateMgmtQrBadge(item);
-      updateMgmtGroupStripes();
+      scheduleMgmtGroupStripesUpdate();
+      // QR自動検出時と同じ理由で、「未検出→検出」に切り替わった瞬間だけ自動的に除外する。
+      // 既に検出済みの写真を編集するたび（1文字打つたび）に毎回上書きすると、
+      // スタッフが手動で再チェックを入れ直した直後の操作でまた外れてしまうため、
+      // このタイミング（最初の1回）に限定している。
+      if(!wasDetected && item.detectedMgmtNumber){
+        item.included = false;
+        const chk2 = item.cardEl && item.cardEl.querySelector('.chk');
+        if(chk2) chk2.checked = false;
+        if(item.cardEl) item.cardEl.classList.add('excluded');
+        updateStatus();
+      }
       if(modalItem === item){ // keep the modal's own input in sync if it's showing this same photo
         modalMgmtInput.value = item.mgmtNumber;
         modalMgmtInput.classList.toggle('filled', !!item.mgmtNumber);
@@ -2113,17 +2152,19 @@ const BRANCH_DEFAULTS = (function(){
       // keystroke, so history has to be recorded once editing finishes
       // (blur), not per-character, or a single number would blow through
       // the entire 5-step undo limit by itself
-      mgmtSnapshotAtFocus = {mgmtNumber: item.mgmtNumber, detectedMgmtNumber: item.detectedMgmtNumber};
+      mgmtSnapshotAtFocus = {mgmtNumber: item.mgmtNumber, detectedMgmtNumber: item.detectedMgmtNumber, included: item.included};
     });
     mgmtInputEl.addEventListener('blur', ()=>{
       if(!mgmtSnapshotAtFocus) return;
-      if(mgmtSnapshotAtFocus.mgmtNumber !== item.mgmtNumber || mgmtSnapshotAtFocus.detectedMgmtNumber !== item.detectedMgmtNumber){
+      if(mgmtSnapshotAtFocus.mgmtNumber !== item.mgmtNumber || mgmtSnapshotAtFocus.detectedMgmtNumber !== item.detectedMgmtNumber || mgmtSnapshotAtFocus.included !== item.included){
         pushMgmtHistoryEntry([{
           itemId: item.id,
           prevNumber: mgmtSnapshotAtFocus.mgmtNumber,
           prevDetected: mgmtSnapshotAtFocus.detectedMgmtNumber,
+          prevIncluded: mgmtSnapshotAtFocus.included,
           newNumber: item.mgmtNumber,
-          newDetected: item.detectedMgmtNumber
+          newDetected: item.detectedMgmtNumber,
+          newIncluded: item.included
         }]);
       }
       mgmtSnapshotAtFocus = null;
@@ -2138,7 +2179,7 @@ const BRANCH_DEFAULTS = (function(){
       const prevDetected = item.detectedMgmtNumber;
       item.detectedMgmtNumber = null;
       updateMgmtQrBadge(item);
-      pushMgmtHistoryEntry([{itemId: item.id, prevNumber: item.mgmtNumber, prevDetected, newNumber: item.mgmtNumber, newDetected: null}]);
+      pushMgmtHistoryEntry([{itemId: item.id, prevNumber: item.mgmtNumber, prevDetected, prevIncluded: item.included, newNumber: item.mgmtNumber, newDetected: null, newIncluded: item.included}]);
     });
 
     card.addEventListener('dragstart', ()=>{
@@ -2427,7 +2468,14 @@ const BRANCH_DEFAULTS = (function(){
       throw new Error('この形式は読み込めません');
     }
 
-    return downscaleToWorkingSize(bitmap, 1800);
+    // クロップを繰り返すほど、選択範囲は元画像に対する割合の掛け算で小さくなっていく
+    // （例：毎回50%を選ぶと2回で25%、3回で12.5%…）ため、常に1800pxで作業していると
+    // 深くズームするほど実質的な解像度が指数関数的に不足していく。かといって全ての
+    // 写真を常に高解像度で扱うと、3000枚規模ではメモリ・処理時間の負担が大きい。
+    // そこで、1回以上クロップされた写真（＝ズームして狙いを絞っている写真）だけ
+    // 高解像度（3600px）で再デコードする。未クロップの大多数の写真は従来通り1800pxのまま。
+    const workingSize = (item.cropRounds >= 1) ? 3600 : 1800;
+    return downscaleToWorkingSize(bitmap, workingSize);
   }
 
   // Releases the decoded working bitmap once a photo has been processed.
@@ -2655,6 +2703,7 @@ const BRANCH_DEFAULTS = (function(){
       // this clears everything that's item-specific so it goes back to
       // acting like a freshly-loaded photo
       item.manualCrop = null;
+      item.cropRounds = 0;
       item.blurRegions = [];
       item.blurStrength = 15;
       item.rotation = 0;
@@ -2763,6 +2812,7 @@ const BRANCH_DEFAULTS = (function(){
       }else{
         console.error('[process] discarding invalid manualCrop:', item.file && item.file.name, mc);
         item.manualCrop = null;
+        item.cropRounds = 0;
       }
     }
 
@@ -3144,6 +3194,20 @@ const BRANCH_DEFAULTS = (function(){
   // shot, not part of the listing itself.
   const MGMT_GROUP_PHOTO_LIMIT = 10;
 
+  // 管理番号入力欄でのキー入力のたびに呼ばれる箇所専用のデバウンス版。
+  // updateMgmtGroupStripes()自体はitemsを2回フル走査する処理で、写真が多い
+  // （3000枚規模等）と1文字打つたびに体感できる遅延が出るため、入力が一段落
+  // してから実行する。読み込み完了時など「1回だけ呼ばれる」箇所は従来通り
+  // 即時実行のupdateMgmtGroupStripes()のままでよい（デバウンス不要）。
+  let mgmtStripesDebounceTimer = null;
+  function scheduleMgmtGroupStripesUpdate(){
+    if(mgmtStripesDebounceTimer) clearTimeout(mgmtStripesDebounceTimer);
+    mgmtStripesDebounceTimer = setTimeout(()=>{
+      mgmtStripesDebounceTimer = null;
+      updateMgmtGroupStripes();
+    }, 200);
+  }
+
   function updateMgmtGroupStripes(){
     // pass 1: tally how many photos are in each 管理番号 group, and how
     // many of those are the group's own QR tag photo (normally exactly
@@ -3342,7 +3406,12 @@ const BRANCH_DEFAULTS = (function(){
       const ctx = canvas.getContext('2d');
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const symbols = await zbarWasm.scanImageData(imageData);
-      if(symbols && symbols.length) return symbols[0].decode();
+      // ZBarはQRコード以外(EAN-13/CODE128等の一般的なバーコード)も検出してしまう。
+      // 商品の外箱等に印刷されたバーコードを誤って管理番号として読み取ってしまう
+      // 事故を防ぐため、QRコードのみに絞り込む（BarcodeDetector/ZXingは元々QR専用の
+      // APIを使っているため、この絞り込みが必要なのはZBarだけ）。
+      const qrSymbol = symbols && symbols.find(s => s.typeName === 'ZBAR_QRCODE');
+      if(qrSymbol) return qrSymbol.decode();
     }catch(e){
       // ignore — falls through to "not found" below
     }
@@ -3410,6 +3479,15 @@ const BRANCH_DEFAULTS = (function(){
         if(/^\d{4,}$/.test(digits)){
           item.detectedMgmtNumber = digits;
           updateMgmtQrBadge(item);
+          // タグ写真（QRコードの紙）は出品には使わないため、検出できた時点で自動的に
+          // 「使用する」チェックを外す。番号の自動割当（computeMgmtAssignment）はincludedを
+          // 見ないため影響しない。連番ファイル名（_01, _02...）は元々タグ写真を対象外に
+          // 数えていたため、除外してもズレは生じない。
+          item.included = false;
+          const chk = item.cardEl && item.cardEl.querySelector('.chk');
+          if(chk) chk.checked = false;
+          if(item.cardEl) item.cardEl.classList.add('excluded');
+          updateStatus();
         }
       }
     }catch(err){
@@ -3577,6 +3655,9 @@ const BRANCH_DEFAULTS = (function(){
 
   const mgmtFullReassignBtn = document.getElementById('mgmtFullReassignBtn');
   mgmtFullReassignBtn.addEventListener('click', ()=> runMgmtFullReassign());
+  // 写真枚数が多いと一覧の最後まで見た後に上まで戻るのが手間なため、同じボタンを
+  // 一覧の末尾にも複製する。処理は上のボタンをクリックしたのと完全に同じにする。
+  document.getElementById('mgmtFullReassignBtnBottom').addEventListener('click', ()=> mgmtFullReassignBtn.click());
 
   // Each item carries item.mgmtNumber (the shared per-product number, e.g.
   // "3301234"). The trailing _01/_02 suffix is NOT stored per item — it's
@@ -3725,6 +3806,132 @@ const BRANCH_DEFAULTS = (function(){
       result.set(it, String(next).padStart(2, '0'));
     });
     return result;
+  }
+
+  // ===== ジェネレーターCSVとの連携（画像1〜10列の自動書き込み） =====
+  // loadedCsv: {header:[列名,...], rows:[[セル,...], ...], mgmtColIdx, imageColIdxs:[画像1〜10の列インデックス]} | null
+  let loadedCsv = null;
+
+  // RFC4180準拠の簡易CSVパーサー。ジェネレーター側の「説明」列は改行・カンマ・
+  // ダブルクォートを含むHTMLなので、単純な split(',') や split('\n') では壊れる。
+  function parseCsv(text){
+    const rows = [];
+    let row = [], field = '', inQuotes = false;
+    for(let i=0; i<text.length; i++){
+      const c = text[i];
+      if(inQuotes){
+        if(c === '"'){
+          if(text[i+1] === '"'){ field += '"'; i++; }
+          else inQuotes = false;
+        }else{
+          field += c;
+        }
+      }else{
+        if(c === '"'){ inQuotes = true; }
+        else if(c === ','){ row.push(field); field = ''; }
+        else if(c === '\r'){ /* skip; \r\n改行は\nの方で処理する */ }
+        else if(c === '\n'){ row.push(field); rows.push(row); row = []; field = ''; }
+        else field += c;
+      }
+    }
+    if(field !== '' || row.length){ row.push(field); rows.push(row); }
+    return rows.filter(r => r.length > 1 || r[0] !== ''); // 末尾の空行を除去
+  }
+
+  // ⚠ この関数はindex.htmlのcsvEscapeField()と同じロジックを別々に実装している
+  // （単一HTMLファイルでのデプロイという制約上、コード共有ができないため）。
+  // 修正する際は必ずindex.html側とCSV_ESCAPE_SHARED_LOGIC.mdも一緒に更新すること。
+  function serializeCsvField(val){
+    val = (val === null || val === undefined) ? '' : String(val);
+    // ジェネレーター側と同じ理由：ヤフオクの一括登録パーサーはフィールド内の改行を許容しないため、
+    // 引用符で囲む前に必ず除去する（読み込んだCSVが対策前バージョンで生成されていた場合の保険）。
+    val = val.replace(/\r\n|\r|\n/g, '');
+    if(/[",]/.test(val)) val = '"' + val.replace(/"/g, '""') + '"';
+    return val;
+  }
+
+  async function readFileAsShiftJisText(file){
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    if(typeof Encoding === 'undefined'){
+      throw new Error('Shift-JIS変換ライブラリの読み込みに失敗しました（ネットワーク接続をご確認ください）。');
+    }
+    const unicodeArray = Encoding.convert(bytes, {to:'UNICODE', from:'SJIS', type:'array'});
+    return Encoding.codeToString(unicodeArray);
+  }
+
+  document.getElementById('csvInput').addEventListener('change', async (e)=>{
+    const file = e.target.files[0];
+    const statusEl = document.getElementById('csvStatus');
+    if(!file){ loadedCsv = null; statusEl.textContent = ''; return; }
+    try{
+      const text = await readFileAsShiftJisText(file);
+      const rows = parseCsv(text);
+      if(rows.length < 1) throw new Error('CSVの内容を読み取れませんでした（空のファイルの可能性があります）。');
+      const header = rows[0];
+      const mgmtColIdx = header.indexOf('管理番号');
+      if(mgmtColIdx === -1) throw new Error('「管理番号」列が見つかりません。出品下書きジェネレーターで出力したCSVを選択してください。');
+      const imageColIdxs = [];
+      for(let n=1; n<=10; n++){
+        const idx = header.indexOf('画像' + n);
+        if(idx === -1) throw new Error(`「画像${n}」列が見つかりません。CSVの形式が想定と異なります。`);
+        imageColIdxs.push(idx);
+      }
+      loadedCsv = {header, rows: rows.slice(1), mgmtColIdx, imageColIdxs, fileName: file.name};
+      statusEl.style.color = '';
+      statusEl.textContent = `読み込み完了: ${loadedCsv.rows.length}件（${file.name}）。ダウンロード時に画像列を自動で埋めます。`;
+    }catch(err){
+      loadedCsv = null;
+      statusEl.style.color = '#e5484d';
+      statusEl.textContent = 'CSV読み込みエラー: ' + (err && err.message ? err.message : err);
+      console.error('[csv load] failed:', err);
+    }
+  });
+
+  // 確定した各写真の書き出しファイル名（mgmtSuffixMapから）を管理番号ごとにまとめ、
+  // loadedCsvの該当行の画像1〜10列に書き込む。タグ写真('QR')は対象外（元々空欄のまま）。
+  // 戻り値: {filled: 書き込んだ行数, unmatchedGroups: CSVに該当行がなかった管理番号の配列}
+  function fillCsvImageColumns(includedItems, mgmtSuffixMap){
+    if(!loadedCsv) return null;
+    const filenamesByMgmt = new Map(); // 管理番号 -> [ファイル名, ...]（画面の並び順）
+    includedItems.forEach(item=>{
+      const suffix = mgmtSuffixMap.get(item);
+      if(!suffix || suffix === 'QR') return; // タグ写真は画像列に含めない
+      const num = item.mgmtNumber || '';
+      if(!filenamesByMgmt.has(num)) filenamesByMgmt.set(num, []);
+      filenamesByMgmt.get(num).push(sanitizeFileNamePart(num) + '_' + suffix + '.jpg');
+    });
+
+    let filled = 0;
+    const matchedMgmtNumbers = new Set();
+    loadedCsv.rows.forEach(row=>{
+      const num = (row[loadedCsv.mgmtColIdx] || '').trim();
+      const files = filenamesByMgmt.get(num);
+      if(!files) return; // このCSV行に対応する写真がまだ用意されていない
+      matchedMgmtNumbers.add(num);
+      loadedCsv.imageColIdxs.forEach((colIdx, i)=>{
+        row[colIdx] = files[i] || '';
+      });
+      filled++;
+    });
+
+    const unmatchedGroups = [...filenamesByMgmt.keys()].filter(num => !matchedMgmtNumbers.has(num));
+    return {filled, unmatchedGroups};
+  }
+
+  function buildCsvBlobFromLoadedCsv(){
+    const lines = [loadedCsv.header, ...loadedCsv.rows]
+      .map(row => row.map(serializeCsvField).join(','))
+      .join('\r\n');
+    let bytes;
+    if(typeof Encoding !== 'undefined'){
+      const unicodeArray = Encoding.stringToCode(lines);
+      const sjisArray = Encoding.convert(unicodeArray, {to:'SJIS', from:'UNICODE'});
+      bytes = new Uint8Array(sjisArray);
+    }else{
+      bytes = new TextEncoder().encode(lines); // フォールバック（ライブラリ未読込時）。ヤフオク側で文字化けの可能性あり
+    }
+    return new Blob([bytes], {type:'text/csv'});
   }
 
   function refreshMergeOrderBadges(){
@@ -3911,7 +4118,7 @@ const BRANCH_DEFAULTS = (function(){
       const newItem = {
         id, file:mergedFile, srcImg:null, processedCanvas:null, baseCanvas:outCanvas,
         cachedBlob:null, included:true, rotation:0, hasError:false,
-        processed:true, selectedForMerge:false, mergeOrder:null, manualCrop:null, blurRegions:[], blurStrength:15, extraBoost:1, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
+        processed:true, selectedForMerge:false, mergeOrder:null, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
         mgmtNumber: inheritedMgmtNumber // carries over from the first selected source photo
       };
       items.push(newItem);
@@ -4250,6 +4457,7 @@ const BRANCH_DEFAULTS = (function(){
   let modalMgmtSnapshotAtFocus = null;
   modalMgmtInput.addEventListener('input', ()=>{
     if(!modalItem) return;
+    const wasDetected = !!modalItem.detectedMgmtNumber;
     modalItem.mgmtNumber = modalMgmtInput.value.trim();
     modalMgmtInput.classList.toggle('filled', !!modalItem.mgmtNumber);
     // same treatment as the per-card input: manual entry counts as a
@@ -4257,7 +4465,19 @@ const BRANCH_DEFAULTS = (function(){
     // source for future auto-assign / 全体を再設定 runs
     modalItem.detectedMgmtNumber = modalItem.mgmtNumber || null;
     updateMgmtQrBadge(modalItem);
-    updateMgmtGroupStripes();
+    scheduleMgmtGroupStripesUpdate();
+    // カード側の入力欄と同じ理由・同じ条件（未検出→検出の初回のみ）で自動除外する。
+    // ここではcardInputのvalueを直接書き換えており'input'イベントは発火しないため、
+    // カード側ハンドラ内の処理は実行されない。同じロジックをここにも明示的に持たせる必要がある。
+    if(!wasDetected && modalItem.detectedMgmtNumber){
+      modalItem.included = false;
+      if(modalItem.cardEl){
+        const chk = modalItem.cardEl.querySelector('.chk');
+        if(chk) chk.checked = false;
+        modalItem.cardEl.classList.add('excluded');
+      }
+      updateStatus();
+    }
     if(modalItem.cardEl){ // keep the thumbnail card's own input in sync too
       const cardInput = modalItem.cardEl.querySelector('.mgmt-input');
       if(cardInput){
@@ -4284,17 +4504,19 @@ const BRANCH_DEFAULTS = (function(){
   });
   modalMgmtInput.addEventListener('focus', ()=>{
     modalMgmtInput.select();
-    if(modalItem) modalMgmtSnapshotAtFocus = {mgmtNumber: modalItem.mgmtNumber, detectedMgmtNumber: modalItem.detectedMgmtNumber};
+    if(modalItem) modalMgmtSnapshotAtFocus = {mgmtNumber: modalItem.mgmtNumber, detectedMgmtNumber: modalItem.detectedMgmtNumber, included: modalItem.included};
   });
   modalMgmtInput.addEventListener('blur', ()=>{
     if(!modalMgmtSnapshotAtFocus || !modalItem) return;
-    if(modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber || modalMgmtSnapshotAtFocus.detectedMgmtNumber !== modalItem.detectedMgmtNumber){
+    if(modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber || modalMgmtSnapshotAtFocus.detectedMgmtNumber !== modalItem.detectedMgmtNumber || modalMgmtSnapshotAtFocus.included !== modalItem.included){
       pushMgmtHistoryEntry([{
         itemId: modalItem.id,
         prevNumber: modalMgmtSnapshotAtFocus.mgmtNumber,
         prevDetected: modalMgmtSnapshotAtFocus.detectedMgmtNumber,
+        prevIncluded: modalMgmtSnapshotAtFocus.included,
         newNumber: modalItem.mgmtNumber,
-        newDetected: modalItem.detectedMgmtNumber
+        newDetected: modalItem.detectedMgmtNumber,
+        newIncluded: modalItem.included
       }]);
     }
     modalMgmtSnapshotAtFocus = null;
@@ -5448,6 +5670,7 @@ const BRANCH_DEFAULTS = (function(){
       }else{
         item.manualCrop = canonicalFrac;
       }
+      item.cropRounds = (item.cropRounds || 0) + 1;
       lastAppliedCropFrac = {...item.manualCrop};
 
       process(item); // also re-renders the thumbnail and clears 'processing' on success
@@ -5502,6 +5725,7 @@ const BRANCH_DEFAULTS = (function(){
     }else{
       modalItem.manualCrop = canonicalFrac;
     }
+    modalItem.cropRounds = (modalItem.cropRounds || 0) + 1;
     lastAppliedCropFrac = {...modalItem.manualCrop};
     cropPresetLastUsed.disabled = false;
     cropPresetLastUsed.title = '写真をCtrl+クリック(Macは⌘+クリック)すると、クリック位置を中心に同じサイズで即適用。Ctrl+ドラッグなら新しい範囲を選択できます';
@@ -5555,6 +5779,15 @@ const BRANCH_DEFAULTS = (function(){
       input.classList.toggle('filled', !!item.mgmtNumber);
     }
     updateMgmtQrBadge(item);
+    // included（使用する/しない）のUndo/Redo復元。チェックボックスとカードの
+    // 除外スタイルを実データ(item.included)に合わせて同期する。
+    const chk = item.cardEl.querySelector('.chk');
+    if(chk) chk.checked = item.included;
+    item.cardEl.classList.toggle('excluded', !item.included);
+    if(modalItem === item && typeof modalMgmtInput !== 'undefined'){
+      modalMgmtInput.value = item.mgmtNumber || '';
+      modalMgmtInput.classList.toggle('filled', !!item.mgmtNumber);
+    }
   }
 
   function updateCropUndoRedoButtons(){
@@ -5617,11 +5850,15 @@ const BRANCH_DEFAULTS = (function(){
         if(!it) return; // e.g. the photo was since deleted — skip, nothing to restore it onto
         it.mgmtNumber = c.prevNumber;
         it.detectedMgmtNumber = c.prevDetected;
+        // prevIncludedを持たない古い履歴エントリ（この拡張より前に積まれたもの）と互換性を保つため、
+        // undefinedの場合は現在値を維持する（意図せずincludedを書き換えない）
+        if(c.prevIncluded !== undefined) it.included = c.prevIncluded;
         refreshMgmtDisplay(it);
       });
       historyRedoStack.push(entry);
       if(historyRedoStack.length > HISTORY_LIMIT) historyRedoStack.shift();
       updateCropUndoRedoButtons();
+      updateStatus();
       updateMgmtGroupStripes();
       return;
     }
@@ -5711,11 +5948,13 @@ const BRANCH_DEFAULTS = (function(){
         if(!it) return;
         it.mgmtNumber = c.newNumber;
         it.detectedMgmtNumber = c.newDetected;
+        if(c.newIncluded !== undefined) it.included = c.newIncluded;
         refreshMgmtDisplay(it);
       });
       historyUndoStack.push(entry);
       if(historyUndoStack.length > HISTORY_LIMIT) historyUndoStack.shift();
       updateCropUndoRedoButtons();
+      updateStatus();
       updateMgmtGroupStripes();
       return;
     }
@@ -5992,6 +6231,7 @@ const BRANCH_DEFAULTS = (function(){
   cropResetBtn.addEventListener('click', async ()=>{
     if(!modalItem || !modalItem.manualCrop) return;
     modalItem.manualCrop = null;
+    modalItem.cropRounds = 0;
     await reprocessModalItem();
   });
 
@@ -6317,6 +6557,31 @@ const BRANCH_DEFAULTS = (function(){
     const mgmtSuffixMap = computeMgmtSuffixMap(included); // _01.._0N per 管理番号 group, gap-free
     const usedNames = new Set();
 
+    // ===== CSV未読み込みでのダウンロード事故防止 =====
+    // CSVを読み込み忘れたままダウンロードすると、写真だけのZIPが出来上がった上に
+    // ワークスペースがクリア（または自動リロード）されてしまい、やり直しが重い。
+    // 事後の救済ではなく、ここで一度確認を挟んで未然に防ぐ。
+    if(!loadedCsv){
+      const proceed = await askConfirm(
+        'CSVが読み込まれていません。このまま続行すると、写真だけのZIP（CSVなし）がダウンロードされます。\n\nCSVを読み込み忘れていませんか？',
+        '写真だけでダウンロード'
+      );
+      if(!proceed){ downloadBtn.disabled = false; return; }
+    }
+
+    // ===== CSV連携：画像1〜10列を埋める（読み込まれている場合のみ） =====
+    if(loadedCsv){
+      const fillResult = fillCsvImageColumns(included, mgmtSuffixMap);
+      if(fillResult && fillResult.unmatchedGroups.length){
+        const list = fillResult.unmatchedGroups.slice(0, 20).join('、') + (fillResult.unmatchedGroups.length > 20 ? ` 他${fillResult.unmatchedGroups.length-20}件` : '');
+        const proceed = await askConfirm(
+          `以下の管理番号の写真が、読み込んだCSVに対応する行が見つかりませんでした（CSVに含まれていないため画像は反映されません）。\n\n${list}\n\nこのまま続行しますか?`,
+          '続行'
+        );
+        if(!proceed){ downloadBtn.disabled = false; return; }
+      }
+    }
+
     try{
       const zip = new JSZip();
       let lastEntryName = null;
@@ -6381,6 +6646,11 @@ const BRANCH_DEFAULTS = (function(){
         await Promise.all(batch.map((item, i)=> processOneForExport(item, batchStart+i)));
       }
 
+      // CSVが読み込まれている場合、画像列を埋めた結果をZIPに同梱する
+      if(loadedCsv){
+        zip.file(loadedCsv.fileName || 'upload.csv', buildCsvBlobFromLoadedCsv());
+      }
+
       downloadBtn.textContent = '圧縮中… 0%';
       const content = await zip.generateAsync({type:'blob', compression:'STORE'}, (metadata)=>{
         downloadBtn.textContent = `圧縮中… ${Math.round(metadata.percent)}%`;
@@ -6388,10 +6658,13 @@ const BRANCH_DEFAULTS = (function(){
       const a = document.createElement('a');
       const zipUrl = URL.createObjectURL(content);
       a.href = zipUrl;
-      if(BRANCH_DEFAULTS.zipFileNamePrefix){
-        const d = new Date();
-        const pad = (n)=> String(n).padStart(2,'0');
-        const stamp = `${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+      const d = new Date();
+      const pad = (n)=> String(n).padStart(2,'0');
+      const stamp = `${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}`;
+      if(loadedCsv){
+        // CSVを同梱する場合は、写真だけのZIPと見分けが付くよう専用の接頭辞にする
+        a.download = `CSVZip_${stamp}.zip`;
+      }else if(BRANCH_DEFAULTS.zipFileNamePrefix){
         a.download = BRANCH_DEFAULTS.zipFileNamePrefix + stamp + '.zip';
       }else{
         a.download = lastEntryName ? lastEntryName.replace(/\.jpg$/i, '.zip') : 'listing_photos.zip';
@@ -6426,6 +6699,39 @@ const BRANCH_DEFAULTS = (function(){
       downloadBtn.textContent = originalLabel;
     }
   });
+
+  // ===== テスト用フック =====
+  // このスクリプト全体はIIFEで閉じられており、内部の純粋なロジック関数（画像デコード・
+  // Canvas処理を伴わないもの）を自動テストから直接呼べない。CSV連携まわりは特に不具合が
+  // 起きやすかった箇所なので、そこだけ最小限window.__test__経由で公開する。
+  // 本番の挙動には一切影響しない（新規追加のみで、既存コードは変更していない）。
+  // 対象は意図的にCanvas/画像デコードを伴わない部分のみに絞っている：それらは実ブラウザでの
+  // 検証が引き続き必要。
+  if(typeof window !== 'undefined'){
+    window.__test__ = {
+      parseCsv,
+      serializeCsvField,
+      fillCsvImageColumns,
+      buildCsvBlobFromLoadedCsv,
+      computeMgmtSuffixMap,
+      getItems: () => items,
+      // 実ファイル・実Canvas処理を経由せず、テスト用のダミー写真をitemsに直接追加する。
+      // 最低限CSV連携ロジックのテストに必要なプロパティのみ受け取る。
+      pushFakeItem: (overrides) => {
+        const item = Object.assign({
+          id: 'test' + (++window.__test__._fakeIdSeq),
+          mgmtNumber: '', detectedMgmtNumber: null, included: true, processed: true,
+          cardEl: null,
+        }, overrides);
+        items.push(item);
+        return item;
+      },
+      _fakeIdSeq: 0,
+      clearItems: () => { items.length = 0; },
+      getLoadedCsv: () => loadedCsv,
+      setLoadedCsv: (v) => { loadedCsv = v; },
+    };
+  }
 
 })();
 </script>
