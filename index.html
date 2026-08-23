@@ -1927,6 +1927,7 @@ const BRANCH_DEFAULTS = (function(){
       // スペースキーの標準動作（チェックのトグル）をそのまま生かす — ここで
       // 無条件にpreventDefaultすると、1枚目を選ぶ際にスペースでチェックできなく
       // なってしまう（マウスクリックでは問題ないが、キーボード操作が壊れる）。
+      if(e.repeat) return; // 押しっぱなしで結合が連続実行されるのを防ぐ
       if((e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') && !mergeRunBtn.disabled){
         e.preventDefault();
         mergeRunBtn.click();
@@ -3772,9 +3773,11 @@ const BRANCH_DEFAULTS = (function(){
     // digits, so scanning into this field works with no extra clicks
     e.stopPropagation(); // keep A/C/Escape shortcuts from firing while typing here
     if(e.key === 'Enter'){
+      if(e.repeat) return; // 押しっぱなしでの連続適用を防止(実行後に選択・入力欄が空になるため実害はないが、明示的に防いでおく)
       e.preventDefault();
       applyMgmtNumberToSelection();
     }else if(e.key === 'Escape'){
+      if(e.repeat) return;
       e.preventDefault();
       clearMgmtSelection();
     }
@@ -4497,6 +4500,7 @@ const BRANCH_DEFAULTS = (function(){
     }
     e.stopPropagation(); // keep A/C/Escape/arrow-key shortcuts from firing while typing here
     if(e.key === 'Enter'){
+      if(e.repeat) return; // 押しっぱなしでの連続実行を防止(実行後にモーダルが閉じるため実害はないが、明示的に防いでおく)
       e.preventDefault();
       modalMgmtInput.blur(); // commits the value (and records undo history) via the blur handler below, synchronously before this continues
       closeFineTuneModal();
@@ -4752,6 +4756,10 @@ const BRANCH_DEFAULTS = (function(){
 
     if((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && e.shiftKey){
       // Ctrl+Shift+Z / Cmd+Shift+Z: redo the most recently undone crop action
+      // e.repeatは、キーを押しっぱなしにした時にブラウザが自動生成する連続keydownイベントで
+      // true になる。ここを弾かないと、押しっぱなしにするだけでどんどんRedoが進んでしまう
+      // （1回押すごとに1回だけ実行してほしいという要望のため、意図的に自動リピートを無効化）。
+      if(e.repeat) return;
       if(historyRedoStack.length){
         e.preventDefault();
         performCropRedo();
@@ -4761,6 +4769,7 @@ const BRANCH_DEFAULTS = (function(){
 
     if((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey) && !e.shiftKey){
       // Ctrl+Y is a common alias for redo on Windows
+      if(e.repeat) return; // 上と同じ理由でキーリピートを無視
       if(historyRedoStack.length){
         e.preventDefault();
         performCropRedo();
@@ -4771,6 +4780,7 @@ const BRANCH_DEFAULTS = (function(){
     if((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey){
       // Ctrl+Z / Cmd+Z: undo the most recent crop action — works whether it
       // was made in the preview modal or via a thumbnail quick-crop
+      if(e.repeat) return; // 上と同じ理由でキーリピートを無視（押しっぱなしでの連続Undo防止）
       if(historyUndoStack.length){
         e.preventDefault();
         performCropUndo();
