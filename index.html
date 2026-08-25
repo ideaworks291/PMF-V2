@@ -1126,7 +1126,7 @@ const BRANCH_DEFAULTS = (function(){
 </style>
 </head>
 <body>
-<div id="app-version-badge" style="position:fixed;bottom:4px;right:8px;font-size:10px;color:#999;opacity:0.55;pointer-events:none;z-index:9999;font-family:monospace;">v2026.08.19</div>
+<div id="app-version-badge" style="position:fixed;bottom:4px;right:8px;font-size:10px;color:#999;opacity:0.55;pointer-events:none;z-index:9999;font-family:monospace;">v2026.08.25</div>
 <div class="wrap">
 
   <header>
@@ -1219,7 +1219,7 @@ const BRANCH_DEFAULTS = (function(){
       </div>
     </div>
 
-    <div class="ctrl" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border, #333)">
+    <div class="ctrl" id="csvIntegrationSection" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border, #333)">
       <label for="csvInput">出品下書きジェネレーターのCSV（任意）</label>
       <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:6px;">
         読み込むと、管理番号が一致する行の画像列（画像1〜10）を自動で埋めて、CSVと写真をまとめてZIPに含めます。
@@ -1562,6 +1562,17 @@ const BRANCH_DEFAULTS = (function(){
   const mergeFloatBar = document.getElementById('mergeFloatBar');
   const mergeFloatCount = document.getElementById('mergeFloatCount');
   const mergeAutoSelectEl = document.getElementById('mergeAutoSelect');
+
+  // ===== CSV連携機能の一時停止フラグ =====
+  // trueに戻せば、CSV読み込み欄の表示・CSV未読み込み時の警告ダイアログを含む
+  // CSV連携機能一式がそのまま復活する（このフラグ以外は変更不要）。
+  // 実装本体(parseCsv・fillCsvImageColumns等)は削除しておらず、単に入り口を
+  // 塞いでいるだけなので、いつでも安全に元に戻せる。
+  const CSV_INTEGRATION_ENABLED = false;
+  if(!CSV_INTEGRATION_ENABLED){
+    const csvSection = document.getElementById('csvIntegrationSection');
+    if(csvSection) csvSection.style.display = 'none';
+  }
 
   let items = []; // {id, file, srcImg, processedCanvas, included, cardEl}
   let idSeq = 0;
@@ -6591,7 +6602,9 @@ const BRANCH_DEFAULTS = (function(){
     // CSVを読み込み忘れたままダウンロードすると、写真だけのZIPが出来上がった上に
     // ワークスペースがクリア（または自動リロード）されてしまい、やり直しが重い。
     // 事後の救済ではなく、ここで一度確認を挟んで未然に防ぐ。
-    if(!loadedCsv){
+    // CSV連携機能自体がCSV_INTEGRATION_ENABLED=falseで一時停止中の間は、この警告も
+    // 表示しない（機能を使わない前提の運用で毎回警告が出るのは煩わしいだけのため）。
+    if(CSV_INTEGRATION_ENABLED && !loadedCsv){
       const proceed = await askConfirm(
         'CSVが読み込まれていません。このまま続行すると、写真だけのZIP（CSVなし）がダウンロードされます。\n\nCSVを読み込み忘れていませんか？',
         '写真だけでダウンロード'
