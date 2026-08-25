@@ -1299,7 +1299,8 @@ const BRANCH_DEFAULTS = (function(){
 </div>
 
 <div class="modal-overlay" id="trashClearConfirmOverlay" style="display:none;">
-  <div class="modal-box" style="max-width:440px;padding:24px;">
+  <div class="modal-box" id="trashClearConfirmBox" style="max-width:440px;padding:24px;">
+    <div id="trashClearConfirmHeading" style="display:none;font-weight:700;font-size:16px;margin-bottom:10px;align-items:center;gap:8px;"></div>
     <p id="trashClearConfirmText" style="margin:0 0 18px;line-height:1.6;white-space:pre-line;"></p>
     <div class="btnrow" style="justify-content:flex-end;gap:10px;">
       <button id="trashClearConfirmCancelBtn" type="button">キャンセル</button>
@@ -1760,15 +1761,32 @@ const BRANCH_DEFAULTS = (function(){
   // an existing batch without the person noticing.
   const addChoiceOverlay = document.getElementById('addChoiceOverlay');
   const trashClearConfirmOverlay = document.getElementById('trashClearConfirmOverlay');
+  const trashClearConfirmBox = document.getElementById('trashClearConfirmBox');
+  const trashClearConfirmHeading = document.getElementById('trashClearConfirmHeading');
   const trashClearConfirmText = document.getElementById('trashClearConfirmText');
   const trashClearConfirmOkBtn = document.getElementById('trashClearConfirmOkBtn');
   const trashClearConfirmCancelBtn = document.getElementById('trashClearConfirmCancelBtn');
   const addChoiceClearBtn = document.getElementById('addChoiceClearBtn');
   const addChoiceAppendBtn = document.getElementById('addChoiceAppendBtn');
-  function askConfirm(message, okLabel){
+  // variant: 'normal'(既定) | 'danger' — 他の確認と見た目が同じだと見分けが付きにくく、
+  // うっかり読み飛ばされてしまう懸念があったため、特に見過ごしたくない警告（10枚制限超過など）
+  // だけ見出し・配色で強調できるようにしている。headingTextを省略した場合は従来通りの
+  // 見た目（本文のみ）になる。
+  function askConfirm(message, okLabel, variant, headingText){
     return new Promise(resolve=>{
       trashClearConfirmText.textContent = message;
       trashClearConfirmOkBtn.textContent = okLabel || '実行';
+      if(variant === 'danger'){
+        trashClearConfirmHeading.textContent = '⚠ ' + (headingText || '見過ごさないでください');
+        trashClearConfirmHeading.style.display = 'flex';
+        trashClearConfirmHeading.style.color = '#c0392b';
+        trashClearConfirmBox.style.border = '3px solid #c0392b';
+        trashClearConfirmBox.style.background = '#fff5f4';
+      }else{
+        trashClearConfirmHeading.style.display = 'none';
+        trashClearConfirmBox.style.border = '';
+        trashClearConfirmBox.style.background = '';
+      }
       trashClearConfirmOverlay.style.display = 'flex';
       function cleanup(result){
         trashClearConfirmOverlay.style.display = 'none';
@@ -6549,7 +6567,9 @@ const BRANCH_DEFAULTS = (function(){
       const summary = overLimitList.map(([num,count])=> `${num}: ${count}枚(${count-MGMT_GROUP_PHOTO_LIMIT}枚オーバー)`).join('\n');
       const proceed = await askConfirm(
         `ヤフオクの1商品10枚制限を超えている商品があります。\n\n${summary}\n\nこのままダウンロードしますか?`,
-        'このままダウンロード'
+        'このままダウンロード',
+        'danger',
+        '10枚制限を超えている商品があります'
       );
       if(!proceed) return;
     }
@@ -6724,6 +6744,7 @@ const BRANCH_DEFAULTS = (function(){
       fillCsvImageColumns,
       buildCsvBlobFromLoadedCsv,
       computeMgmtSuffixMap,
+      askConfirm,
       getItems: () => items,
       // 実ファイル・実Canvas処理を経由せず、テスト用のダミー写真をitemsに直接追加する。
       // 最低限CSV連携ロジックのテストに必要なプロパティのみ受け取る。
