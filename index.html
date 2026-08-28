@@ -1138,8 +1138,8 @@ const BRANCH_DEFAULTS = (function(){
     <h2>1. 写真を読み込む</h2>
     <div class="drop" id="drop">
       <div><strong>クリックまたはドラッグ&ドロップ</strong>で複数枚まとめて読み込み</div>
-      <div style="margin-top:4px;font-size:12px;">JPEG / PNG / HEIC(iPhone) / ZIP(まとめて展開) 対応・複数選択可・最大3000枚</div>
-      <input type="file" id="fileInput" accept="image/*,.heic,.heif,.zip,application/zip" multiple>
+      <div style="margin-top:4px;font-size:12px;">JPEG / PNG / WebP / HEIC(iPhone) / ZIP(まとめて展開) 対応・複数選択可・最大3000枚</div>
+      <input type="file" id="fileInput" accept="image/*,.webp,.heic,.heif,.zip,application/zip" multiple>
     </div>
 
     <div class="settings-groups">
@@ -1676,6 +1676,7 @@ const BRANCH_DEFAULTS = (function(){
   function guessMimeFromName(name){
     const n = name.toLowerCase();
     if(n.endsWith('.png')) return 'image/png';
+    if(n.endsWith('.webp')) return 'image/webp';
     if(n.endsWith('.heic')) return 'image/heic';
     if(n.endsWith('.heif')) return 'image/heif';
     return 'image/jpeg';
@@ -1689,7 +1690,7 @@ const BRANCH_DEFAULTS = (function(){
       if(e.dir) return false;
       const base = e.name.split(/[\/\\]/).pop();
       if(e.name.startsWith('__MACOSX/') || base.startsWith('._') || base === '.DS_Store') return false;
-      return /\.(jpe?g|png|heic|heif)$/i.test(base);
+      return /\.(jpe?g|png|webp|heic|heif)$/i.test(base);
     });
     entries.sort((a,b)=>naturalCompare(a.name, b.name));
     entries = reorderForNumberWraparound(entries, e=>e.name.split(/[\/\\]/).pop());
@@ -1888,7 +1889,7 @@ const BRANCH_DEFAULTS = (function(){
           if(extracted.length){
             zipStatusEl.innerHTML = `<span class="ok">✓</span> ${zf.name}: 画像 <span class="n">${extracted.length}</span>件を読み込みました。処理を開始します…`;
           }else{
-            zipStatusEl.innerHTML = `<span class="warn">⚠</span> ${zf.name}: 対応する画像ファイル(jpg/png/heic)が見つかりませんでした`;
+            zipStatusEl.innerHTML = `<span class="warn">⚠</span> ${zf.name}: 対応する画像ファイル(jpg/png/webp/heic)が見つかりませんでした`;
           }
         }catch(err){
           console.error('[handleFiles] zip processing error:', zf.name, err);
