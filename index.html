@@ -460,6 +460,8 @@ const BRANCH_DEFAULTS = (function(){
   }
   .action-controls .duplicatebtn:hover{color:var(--accent);background:rgba(10,13,16,.9);}
   .action-controls .removebtn:hover{color:var(--warn);background:rgba(10,13,16,.9);}
+  .action-controls .insertbtn{font-weight:700;}
+  .action-controls .insertbtn:hover{color:var(--ok);background:rgba(10,13,16,.9);}
   .card.excluded .imgbox img{filter:brightness(.32) saturate(.6);}
   .card.merge-selected{box-shadow:0 0 0 2px var(--accent);}
   .card .merge-chk{accent-color:var(--accent);width:15px;height:15px;}
@@ -1793,6 +1795,65 @@ const BRANCH_DEFAULTS = (function(){
     updateMgmtGroupStripes();
   }
 
+  // "この写真の直後に新しい写真を追加" — for when a shot was missed during
+  // the original photo session and gets taken separately afterward.
+  // Without this, a newly-added photo always lands at the very END of the
+  // whole batch (see addItemsFromFiles), forcing a manual drag back into
+  // position — tedious, and easy to drop in the wrong spot. Inserting
+  // directly after a chosen photo sidesteps that, and inheriting that
+  // photo's 管理番号 means it's already correctly grouped with its product
+  // without the person needing to type it in by hand.
+  let insertAfterItem = null;
+  const insertFileInput = document.createElement('input');
+  insertFileInput.type = 'file';
+  insertFileInput.multiple = true;
+  insertFileInput.accept = 'image/*,.heic,.heif';
+  insertFileInput.style.display = 'none';
+  document.body.appendChild(insertFileInput);
+
+  insertFileInput.addEventListener('change', ()=>{
+    const files = Array.from(insertFileInput.files || []);
+    insertFileInput.value = ''; // reset so picking the exact same file(s) again still fires 'change' next time
+    const afterItem = insertAfterItem;
+    insertAfterItem = null;
+    if(files.length && afterItem) insertItemsAfter(files, afterItem);
+  });
+
+  function insertItemsAfter(files, afterItem){
+    mgmtAutoAssignRanForThisBatch = false; // a freshly-added photo could itself carry a readable QR, so let the auto-assign pass consider it again
+    let insertIdx = items.indexOf(afterItem);
+    let anchorCardEl = afterItem.cardEl;
+    const newIds = [];
+    files.forEach(f=>{
+      const id = 'img'+(idSeq++);
+      const item = {
+        id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null,
+        included:true, rotation:0, manualCrop:null, blurRegions:[], blurStrength:15, extraBoost:1,
+        hasError:false, processed:false, selectedForMerge:false, mergeOrder:null,
+        overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
+        mgmtNumber: afterItem.mgmtNumber || '', detectedMgmtNumber: null
+      };
+      insertIdx = insertIdx === -1 ? items.length : insertIdx + 1;
+      items.splice(insertIdx, 0, item);
+      renderCard(item);
+      item.cardEl.classList.add('processing');
+      if(anchorCardEl){
+        anchorCardEl.insertAdjacentElement('afterend', item.cardEl);
+      }else{
+        grid.appendChild(item.cardEl);
+      }
+      anchorCardEl = item.cardEl; // chain multiple selected files in order, right after one another
+      enqueueProcessing(item);
+      newIds.push(id);
+    });
+    syncOrderFromDOM();
+    pushCreateHistoryEntry(newIds); // the whole selection undoes as one step
+    updateEmptyMsg();
+    updateStatus();
+    updateMergeStatus();
+    updateMgmtGroupStripes();
+  }
+
   // Shown whenever new files are added while photos are already loaded, so
   // a second drag-and-drop doesn't silently mix into (or accidentally wipe)
   // an existing batch without the person noticing.
@@ -1930,6 +1991,7 @@ const BRANCH_DEFAULTS = (function(){
         <div class="badge-qr" style="display:none;"></div>
         <div class="badge-overlimit" title="タグ写真を除いた実際の使用枚数が、ヤフオクの1商品10枚制限を超えています。結合などで枚数を減らしてください"></div>
         <div class="action-controls">
+          <button class="insertbtn" title="この写真の直後に新しい写真を追加(管理番号はこの写真から引き継がれます)" type="button">+</button>
           <button class="duplicatebtn" title="この写真を複製(直後に挿入されます。ラベルの拡大などで別写真を流用したい時に)" type="button">⧉</button>
           <button class="removebtn" title="削除" type="button">✕</button>
         </div>
@@ -2136,6 +2198,11 @@ const BRANCH_DEFAULTS = (function(){
     card.querySelector('.duplicatebtn').addEventListener('click', (e)=>{
       e.stopPropagation();
       duplicateItem(item);
+    });
+    card.querySelector('.insertbtn').addEventListener('click', (e)=>{
+      e.stopPropagation();
+      insertAfterItem = item;
+      insertFileInput.click();
     });
 
     const mgmtInputEl = card.querySelector('.mgmt-input');
@@ -5629,8 +5696,8 @@ const BRANCH_DEFAULTS = (function(){
   // mechanism as an ordinary delete); redo brings it right back via
   // restoreFromTrash — reusing that existing machinery rather than
   // building a separate undo path for "creation".
-  function pushCreateHistoryEntry(itemId){
-    pushHistoryEntry({type:'create', itemId});
+  function pushCreateHistoryEntry(itemIds){
+    pushHistoryEntry({type:'create', itemIds: Array.isArray(itemIds) ? [...itemIds] : [itemIds]});
   }
 
   // changes: [{itemId, prevNumber, prevDetected, newNumber, newDetected}, ...]
@@ -5725,10 +5792,10 @@ const BRANCH_DEFAULTS = (function(){
     }
 
     if(entry.type === 'create'){
-      const it = items.find(x=>x.id === entry.itemId);
-      if(it){
-        deleteItemWithUndo(it, it.cardEl); // moves it to trash, same as an ordinary delete
-      }
+      entry.itemIds.forEach(id=>{
+        const it = items.find(x=>x.id === id);
+        if(it) deleteItemWithUndo(it, it.cardEl); // moves it to trash, same as an ordinary delete
+      });
       historyRedoStack.push(entry);
       if(historyRedoStack.length > HISTORY_LIMIT) historyRedoStack.shift();
       updateCropUndoRedoButtons();
@@ -5831,7 +5898,7 @@ const BRANCH_DEFAULTS = (function(){
     }
 
     if(entry.type === 'create'){
-      restoreFromTrash(entry.itemId); // brings it back exactly like undoing a delete would
+      entry.itemIds.forEach(id => restoreFromTrash(id)); // brings them back exactly like undoing a delete would
       historyUndoStack.push(entry);
       if(historyUndoStack.length > HISTORY_LIMIT) historyUndoStack.shift();
       updateCropUndoRedoButtons();
