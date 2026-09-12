@@ -4872,11 +4872,14 @@ const BRANCH_DEFAULTS = (function(){
     // Ctrl+A / ⌘+A are treated the same as a plain A press rather than
     // being left to the browser's native select-all.
     if((e.key === 'a' || e.key === 'A') && !e.altKey){
+      // 押しっぱなし中の連続イベントでもpreventDefaultは毎回呼ぶ(呼ばないと、ブラウザ
+      // 標準のCtrl+A全選択が、キーリピートのタイミングでそのまま素通りしてしまう)。
+      // 実際にトグルするのは最初の1回だけにするため、e.repeatのチェックはその後に置く。
+      e.preventDefault();
       if(e.repeat) return; // ignore OS key-repeat while held — otherwise a single press can fire this (and the reprocess it triggers) many times over
       // toggles both copies of the aspect-lock checkbox at once (main grid
       // + modal) — they're kept in sync everywhere else, so the shortcut
       // should be too
-      e.preventDefault();
       const newState = !cropAspectLock.checked;
       cropAspectLock.checked = newState;
       gridCropAspectLock.checked = newState;
@@ -4884,11 +4887,11 @@ const BRANCH_DEFAULTS = (function(){
     }
 
     if((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey && !e.altKey){
+      if(!modalItem) return; // 対象の写真が無ければブラウザ標準動作を妨げない
+      e.preventDefault(); // 押しっぱなし中の連続イベントでも毎回呼ぶ(下記と同じ理由)
       if(e.repeat) return; // same reasoning as the A shortcut above
       // only meaningful while previewing a specific photo — this is a
       // per-photo setting, unlike the aspect-lock toggle above
-      if(!modalItem) return;
-      e.preventDefault();
       modalColorMatchEl.checked = !modalColorMatchEl.checked;
       // same reasoning as modalColorMatchEl's own 'change' handler — this
       // shortcut bypasses that handler (setting .checked via JS doesn't
@@ -4943,12 +4946,13 @@ const BRANCH_DEFAULTS = (function(){
 
     if((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && e.shiftKey){
       // Ctrl+Shift+Z / Cmd+Shift+Z: redo the most recently undone crop action
-      // e.repeatは、キーを押しっぱなしにした時にブラウザが自動生成する連続keydownイベントで
-      // true になる。ここを弾かないと、押しっぱなしにするだけでどんどんRedoが進んでしまう
+      // 押しっぱなし中の連続イベントでもpreventDefaultは毎回呼ぶ(呼ばないと、ブラウザや
+      // OSがこの組み合わせに割り当てている標準動作がキーリピート中に素通りしてしまう)。
+      // 実際にRedoするのは最初の1回だけにするため、e.repeatのチェックはその後に置く
       // （1回押すごとに1回だけ実行してほしいという要望のため、意図的に自動リピートを無効化）。
+      e.preventDefault();
       if(e.repeat) return;
       if(historyRedoStack.length){
-        e.preventDefault();
         performCropRedo();
       }
       return;
@@ -4956,9 +4960,9 @@ const BRANCH_DEFAULTS = (function(){
 
     if((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey) && !e.shiftKey){
       // Ctrl+Y is a common alias for redo on Windows
+      e.preventDefault(); // 押しっぱなし中も毎回呼ぶ(上と同じ理由)
       if(e.repeat) return; // 上と同じ理由でキーリピートを無視
       if(historyRedoStack.length){
-        e.preventDefault();
         performCropRedo();
       }
       return;
@@ -4967,9 +4971,9 @@ const BRANCH_DEFAULTS = (function(){
     if((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey) && !e.shiftKey){
       // Ctrl+Z / Cmd+Z: undo the most recent crop action — works whether it
       // was made in the preview modal or via a thumbnail quick-crop
+      e.preventDefault(); // 押しっぱなし中も毎回呼ぶ(ブラウザ標準のUndoと衝突しないように)
       if(e.repeat) return; // 上と同じ理由でキーリピートを無視（押しっぱなしでの連続Undo防止）
       if(historyUndoStack.length){
-        e.preventDefault();
         performCropUndo();
       }
       return;
