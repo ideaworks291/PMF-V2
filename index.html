@@ -550,6 +550,7 @@ const BRANCH_DEFAULTS = (function(){
     font-family:var(--mono);
     font-size:12px;
     letter-spacing:.04em;
+    cursor:pointer; /* 表示専用・クリックでプレビュー画面を開く動線であることを示す */
   }
   .card .mgmt-input:focus{
     outline:none;
@@ -559,78 +560,6 @@ const BRANCH_DEFAULTS = (function(){
     border-color:#2f7d5a;
     background:rgba(47,125,90,.12);
   }
-  /* Shift+click range selection for bulk-assigning a 管理番号 */
-  .card.mgmt-range-selected{
-    box-shadow:0 0 0 2px #38bdf8;
-  }
-  .card.mgmt-range-anchor{
-    box-shadow:0 0 0 3px #0ea5e9;
-  }
-  .mgmt-float-bar{
-    position:fixed;
-    left:50%;
-    bottom:24px;
-    transform:translateX(-50%);
-    background:var(--panel);
-    border:2px solid #38bdf8;
-    border-radius:14px;
-    box-shadow:0 12px 40px rgba(0,0,0,.6), 0 0 0 6px rgba(56,189,248,.15);
-    padding:16px 22px;
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-    z-index:60;
-    width:420px;
-    max-width:92vw;
-    animation:mergeFloatIn .25s ease-out;
-  }
-  .mgmt-float-info{
-    min-height:20px;
-    display:flex;
-    align-items:center;
-  }
-  .mgmt-float-count{
-    font-family:var(--mono);
-    font-size:14px;
-    color:var(--text);
-    font-weight:700;
-    line-height:1.4;
-  }
-  .mgmt-float-count::before{
-    content:"🏷 ";
-  }
-  .mgmt-float-controls{
-    display:flex;
-    align-items:center;
-    gap:10px;
-  }
-  .mgmt-float-controls input[type=text]{
-    flex:1 1 auto;
-    background:var(--panel-2);
-    border:1px solid var(--line);
-    color:var(--text);
-    padding:9px 10px;
-    border-radius:6px;
-    font-family:var(--mono);
-    font-size:14px;
-    letter-spacing:.06em;
-  }
-  .mgmt-float-controls input[type=text]:focus{outline:none;border-color:#38bdf8;}
-  .mgmt-float-bar button{
-    font-family:var(--sans);
-    font-size:15px;
-    font-weight:700;
-    padding:11px 20px;
-    border-radius:6px;
-    border:1px solid var(--line);
-    background:var(--panel-2);
-    color:var(--text);
-    cursor:pointer;
-    white-space:nowrap;
-  }
-  .mgmt-float-bar button.primary{background:#38bdf8;border-color:#38bdf8;color:#0a1620;}
-  .mgmt-float-bar button.primary:hover{background:#0ea5e9;}
-  .mgmt-float-bar button:disabled{opacity:.4;cursor:not-allowed;}
   .card .chk{accent-color:var(--accent);width:16px;height:16px;}
   .card .badge-highlight{
     display:block;
@@ -764,6 +693,64 @@ const BRANCH_DEFAULTS = (function(){
   @keyframes mergeFloatIn{
     from{transform:translateX(-50%) translateY(20px); opacity:0;}
     to{transform:translateX(-50%) translateY(0); opacity:1;}
+  }
+  /* ===== モーダル発の自動再割当てトースト(テスト機能) ===== */
+  .mgmt-reassign-toast{
+    position:fixed;
+    right:24px;
+    bottom:24px;
+    background:var(--panel);
+    border:2px solid var(--accent);
+    border-radius:12px;
+    box-shadow:0 12px 40px rgba(0,0,0,.6), 0 0 0 6px rgba(192,0,129,.15);
+    padding:14px 16px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+    z-index:70;
+    max-width:360px;
+    animation:mgmtToastIn .2s ease-out;
+  }
+  .mgmt-reassign-toast.hiding{
+    animation:mgmtToastOut .2s ease-in forwards;
+  }
+  @keyframes mgmtToastIn{
+    from{transform:translateY(16px); opacity:0;}
+    to{transform:translateY(0); opacity:1;}
+  }
+  @keyframes mgmtToastOut{
+    from{transform:translateY(0); opacity:1;}
+    to{transform:translateY(16px); opacity:0;}
+  }
+  .mgmt-reassign-toast-text{
+    font-size:13px;
+    color:var(--text);
+    line-height:1.4;
+  }
+  .mgmt-reassign-toast button{
+    flex:0 0 auto;
+    font-family:var(--sans);
+    font-size:13px;
+    font-weight:700;
+    padding:8px 14px;
+    border-radius:6px;
+    border:1px solid var(--accent);
+    background:var(--accent);
+    color:#fff;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .mgmt-reassign-toast button:hover{opacity:.88;}
+  /* 未反映の手動変更がある間、下部の再割当てボタンを強調する */
+  #mgmtFullReassignBtnBottom.mgmt-reassign-pending{
+    background:var(--accent);
+    color:#fff;
+    border-color:var(--accent);
+    animation:mgmtPendingPulse 1.6s ease-in-out infinite;
+  }
+  @keyframes mgmtPendingPulse{
+    0%, 100%{box-shadow:0 0 0 0 rgba(192,0,129,.5);}
+    50%{box-shadow:0 0 0 6px rgba(192,0,129,0);}
   }
   .merge-float-count{
     font-family:var(--mono);
@@ -1276,11 +1263,6 @@ const BRANCH_DEFAULTS = (function(){
       </div>
     </div>
 
-    <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
-      <button id="mgmtFullReassignBtn" type="button" title="漏れていた起点を手動で設定し終えた後などに、確定済みの起点(🏷が付いた写真)を基準に全ての番号を計算し直します。起点以外の写真は上書きされます">🔄 管理番号を再割当て</button>
-      <span id="mgmtAutoAssignHint" style="font-size:11px;color:var(--text-dim);"></span>
-    </div>
-
     <div class="mgmt-lock-hint" id="mgmtLockHint">
       <span class="spinner"></span>
       <span>写真を処理中です。QRタグの読み取りが完了するまで、写真の操作は少しお待ちください。</span>
@@ -1292,6 +1274,7 @@ const BRANCH_DEFAULTS = (function(){
 
     <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
       <button id="mgmtFullReassignBtnBottom" type="button" title="漏れていた起点を手動で設定し終えた後などに、確定済みの起点(🏷が付いた写真)を基準に全ての番号を計算し直します。起点以外の写真は上書きされます">🔄 管理番号を再割当て</button>
+      <span id="mgmtAutoAssignHint" style="font-size:11px;color:var(--text-dim);"></span>
     </div>
   </div>
 
@@ -1353,15 +1336,14 @@ const BRANCH_DEFAULTS = (function(){
   </div>
 </div>
 
-<div class="mgmt-float-bar" id="mgmtFloatBar" style="display:none;">
-  <div class="mgmt-float-info">
-    <span class="mgmt-float-count" id="mgmtFloatCount">0枚選択中</span>
-  </div>
-  <div class="mgmt-float-controls">
-    <input type="text" id="mgmtFloatInput" placeholder="管理番号(例: 3301234)" maxlength="20" autocomplete="off">
-    <button class="primary" id="mgmtFloatApplyBtn" disabled>付与</button>
-    <button id="mgmtFloatClearBtn">選択解除</button>
-  </div>
+<!-- 範囲選択での一括入力バーは削除済み(壁打ちの結論:モーダル自動再割当てと役割が
+     重複し存在意義が薄いため機能ごと廃止。QRが全く無い運用は発生しないことも確認済み) -->
+
+<!-- モーダル発の自動再割当てトースト(テスト機能)。デフォルトでは非表示で、
+     モーダルで管理番号を変更して閉じた時だけJS側でDOMに追加/表示する。 -->
+<div class="mgmt-reassign-toast" id="mgmtReassignToast" style="display:none;">
+  <span class="mgmt-reassign-toast-text">管理番号を更新しました。反映しますか？</span>
+  <button type="button" id="mgmtReassignToastBtn">今すぐ再割当て</button>
 </div>
 
 <div class="modal-overlay" id="modalOverlay" style="display:none;">
@@ -2054,7 +2036,7 @@ const BRANCH_DEFAULTS = (function(){
         </label>
       </div>
       <div class="mgmt-row">
-        <input type="text" class="mgmt-input" placeholder="管理番号" maxlength="20" title="管理番号(Shift+クリックで範囲選択して一括入力もできます)">
+        <input type="text" class="mgmt-input" placeholder="管理番号" maxlength="20" readonly title="管理番号(表示のみ。クリックするとプレビュー画面が開き、そこで編集できます)">
       </div>
     `;
     grid.appendChild(card);
@@ -2197,19 +2179,6 @@ const BRANCH_DEFAULTS = (function(){
       if(!item.processed) return;
       if(suppressNextThumbClick){ suppressNextThumbClick = false; return; }
 
-      // Shift+click: extend the 管理番号 range selection from the anchor to
-      // this card. A plain click (handled further down) opens the preview as
-      // usual, so this only intercepts when Shift is actually held.
-      if(e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){
-        e.preventDefault();
-        if(!mgmtAnchorItem){
-          setMgmtAnchor(item);
-        }else{
-          selectMgmtRangeTo(item);
-        }
-        return;
-      }
-
       // a drawn-but-unconfirmed range is waiting on this card — clicking
       // inside it confirms it, regardless of whether Ctrl is still held
       // (releasing Ctrl between the drag and the confirming click is
@@ -2266,67 +2235,24 @@ const BRANCH_DEFAULTS = (function(){
     const mgmtInputEl = card.querySelector('.mgmt-input');
     mgmtInputEl.value = item.mgmtNumber || '';
     mgmtInputEl.classList.toggle('filled', !!item.mgmtNumber);
-    let mgmtSnapshotAtFocus = null; // {mgmtNumber, detectedMgmtNumber} as they were when editing started
-    mgmtInputEl.addEventListener('input', ()=>{
-      const wasDetected = !!item.detectedMgmtNumber;
-      item.mgmtNumber = mgmtInputEl.value.trim();
-      mgmtInputEl.classList.toggle('filled', !!item.mgmtNumber);
-      // treat a manually-typed number the same as a successful QR read: it
-      // becomes a valid propagation anchor for future auto-assign runs, and
-      // gets the same 🏷 badge — this is how a tag photo whose QR failed to
-      // scan gets flagged, without needing a separate "this is a tag" toggle
-      item.detectedMgmtNumber = item.mgmtNumber || null;
-      updateMgmtQrBadge(item);
-      scheduleMgmtGroupStripesUpdate();
-      // QR自動検出時と同じ理由で、「未検出→検出」に切り替わった瞬間だけ自動的に除外する。
-      // 既に検出済みの写真を編集するたび（1文字打つたび）に毎回上書きすると、
-      // スタッフが手動で再チェックを入れ直した直後の操作でまた外れてしまうため、
-      // このタイミング（最初の1回）に限定している。
-      if(!wasDetected && item.detectedMgmtNumber){
-        item.included = false;
-        const chk2 = item.cardEl && item.cardEl.querySelector('.chk');
-        if(chk2) chk2.checked = false;
-        if(item.cardEl) item.cardEl.classList.add('excluded');
-        updateStatus();
+    // カード上での直接編集は廃止(壁打ちの結論:誤って隣の写真の欄を触ってしまうと、
+    // 自動再割当てで影響範囲が周囲に広がるため、編集経路をモーダルに一本化してリスクを
+    // 遮断する)。読み取り専用の表示欄とし、クリックするとプレビュー画面が開いて
+    // そちらで編集する動線にする。
+    mgmtInputEl.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      if(!item.processed) return;
+      try{
+        const ok = await ensureBaseCanvasLoaded(item);
+        if(ok){
+          openFineTuneModal(item, true);
+        }else{
+          alert('この写真のプレビューを開けませんでした。読み込み直してみてください。');
+        }
+      }catch(err){
+        console.error(err);
+        alert('この写真のプレビューを開けませんでした。読み込み直してみてください。');
       }
-      if(modalItem === item){ // keep the modal's own input in sync if it's showing this same photo
-        modalMgmtInput.value = item.mgmtNumber;
-        modalMgmtInput.classList.toggle('filled', !!item.mgmtNumber);
-      }
-    });
-    mgmtInputEl.addEventListener('keydown', (e)=>{
-      if(e.ctrlKey || e.metaKey || e.key === 'Control' || e.key === 'Meta'){
-        // モーダル側と同じ理由: この入力欄にフォーカスが残ったままだと、
-        // Ctrl+ドラッグでのクイックトリミングやAキーの縦横比ロック切替が
-        // 反応しない。Ctrlが押された時点でフォーカスを外す
-        mgmtInputEl.blur();
-        return;
-      }
-      e.stopPropagation(); // keep A/C/Escape shortcuts from firing while typing here
-      if(e.key === 'Enter') mgmtInputEl.blur();
-    });
-    mgmtInputEl.addEventListener('focus', ()=>{
-      mgmtInputEl.select(); // ready to type over the existing number immediately, no manual select needed
-      // snapshot BEFORE any edits — the 'input' event fires on every
-      // keystroke, so history has to be recorded once editing finishes
-      // (blur), not per-character, or a single number would blow through
-      // the entire 5-step undo limit by itself
-      mgmtSnapshotAtFocus = {mgmtNumber: item.mgmtNumber, detectedMgmtNumber: item.detectedMgmtNumber, included: item.included};
-    });
-    mgmtInputEl.addEventListener('blur', ()=>{
-      if(!mgmtSnapshotAtFocus) return;
-      if(mgmtSnapshotAtFocus.mgmtNumber !== item.mgmtNumber || mgmtSnapshotAtFocus.detectedMgmtNumber !== item.detectedMgmtNumber || mgmtSnapshotAtFocus.included !== item.included){
-        pushMgmtHistoryEntry([{
-          itemId: item.id,
-          prevNumber: mgmtSnapshotAtFocus.mgmtNumber,
-          prevDetected: mgmtSnapshotAtFocus.detectedMgmtNumber,
-          prevIncluded: mgmtSnapshotAtFocus.included,
-          newNumber: item.mgmtNumber,
-          newDetected: item.detectedMgmtNumber,
-          newIncluded: item.included
-        }]);
-      }
-      mgmtSnapshotAtFocus = null;
     });
 
     card.querySelector('.badge-qr').addEventListener('click', (e)=>{
@@ -2450,14 +2376,6 @@ const BRANCH_DEFAULTS = (function(){
       thumbCropPendingItem = null;
       thumbCropPendingViewFrac = null;
       hideThumbCropBox();
-    }
-    // same for the 管理番号 range selection — a deleted card must not stay
-    // referenced as the anchor or part of the pending range
-    if(typeof mgmtAnchorItem !== 'undefined'){
-      if(mgmtAnchorItem === item) mgmtAnchorItem = null;
-      if(mgmtSelectedItems.includes(item)){
-        mgmtSelectedItems = mgmtSelectedItems.filter(i=>i !== item);
-      }
     }
 
     items = items.filter(i=>i.id!==item.id);
@@ -3460,9 +3378,6 @@ const BRANCH_DEFAULTS = (function(){
     items = [];
     grid.innerHTML = '';
     grid.appendChild(emptyMsg);
-    mgmtAnchorItem = null;   // the cards these referenced are gone
-    mgmtSelectedItems = [];
-    if(typeof refreshMgmtSelectionUI === 'function') refreshMgmtSelectionUI();
     deletedItems = [];
     trashGrid.innerHTML = '';
     updateTrashPanelVisibility();
@@ -3787,18 +3702,22 @@ const BRANCH_DEFAULTS = (function(){
   }
 
   // "全体を再設定" — see computeMgmtAssignment's overwrite=true doc above.
-  async function runMgmtFullReassign(){
+  // skipConfirm: トースト経由の実行時はtrue。モーダルを閉じた直後に「実行しますか?」の
+  // 意思決定は既にトースト自体が担っているため、ここでの確認ダイアログは二重になるので省略する。
+  async function runMgmtFullReassign(skipConfirm){
     if(!items.length) return;
     const anchorCount = items.filter(it=>it.detectedMgmtNumber).length;
     if(!anchorCount){
       mgmtAutoAssignHint.textContent = '起点となる番号(QR検出済み、または手動で確定した番号)が1件もありません。';
       return;
     }
-    const proceed = await askConfirm(
-      '手動設定も含めた起点フラグを基準に、管理番号を再割当てします。',
-      '実行'
-    );
-    if(!proceed) return;
+    if(!skipConfirm){
+      const proceed = await askConfirm(
+        '手動設定も含めた起点フラグを基準に、管理番号を再割当てします。',
+        '実行'
+      );
+      if(!proceed) return;
+    }
     const {changes, groupCount, tagFirstMode} = computeMgmtAssignment(true);
     pushMgmtHistoryEntry(changes);
     const unassigned = items.filter(it=> !it.mgmtNumber).length;
@@ -3809,81 +3728,17 @@ const BRANCH_DEFAULTS = (function(){
     }
     mgmtAutoAssignHint.textContent = msg;
     updateMgmtGroupStripes();
+    mgmtHasUnreflectedChanges = false;
+    updateMgmtReassignHighlight();
   }
 
 
-  const mgmtFullReassignBtn = document.getElementById('mgmtFullReassignBtn');
+  const mgmtFullReassignBtn = document.getElementById('mgmtFullReassignBtnBottom');
   mgmtFullReassignBtn.addEventListener('click', ()=> runMgmtFullReassign());
-  // 写真枚数が多いと一覧の最後まで見た後に上まで戻るのが手間なため、同じボタンを
-  // 一覧の末尾にも複製する。処理は上のボタンをクリックしたのと完全に同じにする。
-  document.getElementById('mgmtFullReassignBtnBottom').addEventListener('click', ()=> mgmtFullReassignBtn.click());
 
   // Each item carries item.mgmtNumber (the shared per-product number, e.g.
   // "3301234"). The trailing _01/_02 suffix is NOT stored per item — it's
   // derived at download time from each item's position within its group, so
-  // that merging/deleting/reordering never leaves gaps in the numbering.
-  //
-  // UI follows the exact same pattern as the merge selection: a bottom-fixed
-  // floating bar that appears only while a range is pending/selected —
-  // nothing permanently on screen when it's not in use.
-  const mgmtFloatBar = document.getElementById('mgmtFloatBar');
-  const mgmtFloatCount = document.getElementById('mgmtFloatCount');
-  const mgmtFloatInput = document.getElementById('mgmtFloatInput');
-  const mgmtFloatApplyBtn = document.getElementById('mgmtFloatApplyBtn');
-  const mgmtFloatClearBtn = document.getElementById('mgmtFloatClearBtn');
-
-  let mgmtAnchorItem = null;       // first card of the pending range selection
-  let mgmtSelectedItems = [];      // full range, in grid order
-
-  function refreshMgmtSelectionUI(){
-    items.forEach(it=>{
-      if(!it.cardEl) return;
-      it.cardEl.classList.toggle('mgmt-range-selected', mgmtSelectedItems.includes(it));
-      it.cardEl.classList.toggle('mgmt-range-anchor', it === mgmtAnchorItem && mgmtSelectedItems.length === 0);
-    });
-    const hasAnchorOnly = !!mgmtAnchorItem && mgmtSelectedItems.length === 0;
-    const hasSelection = mgmtSelectedItems.length > 0;
-    mgmtFloatBar.style.display = (hasAnchorOnly || hasSelection) ? 'flex' : 'none';
-    mgmtFloatApplyBtn.disabled = !hasSelection;
-    if(hasSelection){
-      mgmtFloatCount.textContent = `${mgmtSelectedItems.length}枚を選択中`;
-      mgmtFloatInput.disabled = false;
-    }else if(hasAnchorOnly){
-      mgmtFloatCount.textContent = '起点を選択中(終点をShift+クリック)';
-      mgmtFloatInput.disabled = true;
-    }
-  }
-
-  function setMgmtAnchor(item){
-    mgmtAnchorItem = item;
-    mgmtSelectedItems = [];
-    refreshMgmtSelectionUI();
-  }
-
-  function selectMgmtRangeTo(item){
-    const startIdx = items.indexOf(mgmtAnchorItem);
-    const endIdx = items.indexOf(item);
-    if(startIdx < 0 || endIdx < 0){ clearMgmtSelection(); return; }
-    const [lo, hi] = startIdx <= endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
-    mgmtSelectedItems = items.slice(lo, hi+1);
-    refreshMgmtSelectionUI();
-    // the tag photo is always first or last in the range — if either end
-    // has a QR-detected number, pre-fill it (still needs Enter/click to
-    // actually apply, so a wrong auto-read can't silently slip through)
-    const first = mgmtSelectedItems[0];
-    const last = mgmtSelectedItems[mgmtSelectedItems.length - 1];
-    const autoNumber = first.detectedMgmtNumber || last.detectedMgmtNumber || '';
-    mgmtFloatInput.value = autoNumber;
-    mgmtFloatInput.focus();
-    if(autoNumber) mgmtFloatInput.select(); // easy to overwrite if the wrong end got picked up
-  }
-
-  function clearMgmtSelection(){
-    mgmtAnchorItem = null;
-    mgmtSelectedItems = [];
-    refreshMgmtSelectionUI();
-  }
-
   function setItemMgmtNumber(item, value){
     item.mgmtNumber = value ? value.trim() : '';
     if(item.cardEl){
@@ -3900,46 +3755,6 @@ const BRANCH_DEFAULTS = (function(){
       modalMgmtInput.classList.toggle('filled', !!item.mgmtNumber);
     }
   }
-
-  function applyMgmtNumberToSelection(){
-    const value = mgmtFloatInput.value.trim();
-    if(!value || !mgmtSelectedItems.length) return;
-    const changes = [];
-    mgmtSelectedItems.forEach(it=>{
-      const prevNumber = it.mgmtNumber;
-      const prevDetected = it.detectedMgmtNumber;
-      setItemMgmtNumber(it, value);
-      if(prevNumber !== it.mgmtNumber){
-        changes.push({itemId: it.id, prevNumber, prevDetected, newNumber: it.mgmtNumber, newDetected: it.detectedMgmtNumber});
-      }
-    });
-    pushMgmtHistoryEntry(changes); // one undo step restores the whole range at once
-    clearMgmtSelection();
-    mgmtFloatInput.value = '';
-    updateMgmtGroupStripes();
-  }
-
-  mgmtFloatApplyBtn.addEventListener('click', applyMgmtNumberToSelection);
-  mgmtFloatClearBtn.addEventListener('click', clearMgmtSelection);
-  mgmtFloatInput.addEventListener('keydown', (e)=>{
-    if(e.ctrlKey || e.metaKey || e.key === 'Control' || e.key === 'Meta'){
-      // 他の管理番号入力欄と同じ理由でフォーカスを解除
-      mgmtFloatInput.blur();
-      return;
-    }
-    // Enter confirms — this is also what a barcode scanner sends after the
-    // digits, so scanning into this field works with no extra clicks
-    e.stopPropagation(); // keep A/C/Escape shortcuts from firing while typing here
-    if(e.key === 'Enter'){
-      if(e.repeat) return; // 押しっぱなしでの連続適用を防止(実行後に選択・入力欄が空になるため実害はないが、明示的に防いでおく)
-      e.preventDefault();
-      applyMgmtNumberToSelection();
-    }else if(e.key === 'Escape'){
-      if(e.repeat) return;
-      e.preventDefault();
-      clearMgmtSelection();
-    }
-  });
 
   // Groups items by 管理番号, preserving grid order, and returns a Map of
   // item -> its 1-based position within its own group. Used at download time
@@ -4643,6 +4458,68 @@ const BRANCH_DEFAULTS = (function(){
   });
   let modalItem = null;
 
+  // ===== モーダル発の自動再割当て(テスト機能・壁打ちの結論で実装) =====
+  // モーダルで管理番号を確定して「本当に閉じた」時だけ、再割当てを提案するトーストを
+  // 出す。矢印キーでの連続編集中(navigateModalはcloseFineTuneModalを呼ばない)は
+  // セッションが継続しているとみなし、その間の変更はまとめて1回のトースト対象にする。
+  let modalSessionHadMgmtChange = false;
+  // 下部ボタンの強調表示用。トースト・ボタンどちらで再割当てしても解消する、
+  // 「未反映の手動変更がある」ことを示す永続的なフラグ(モーダルセッションを跨いで残る)。
+  let mgmtHasUnreflectedChanges = false;
+  function markMgmtUnreflected(){
+    mgmtHasUnreflectedChanges = true;
+    modalSessionHadMgmtChange = true;
+    updateMgmtReassignHighlight();
+  }
+  function updateMgmtReassignHighlight(){
+    const btn = document.getElementById('mgmtFullReassignBtnBottom');
+    if(btn) btn.classList.toggle('mgmt-reassign-pending', mgmtHasUnreflectedChanges);
+  }
+
+  const mgmtReassignToast = document.getElementById('mgmtReassignToast');
+  const mgmtReassignToastBtn = document.getElementById('mgmtReassignToastBtn');
+  let mgmtReassignToastTimer = null;
+
+  function hideMgmtReassignToast(){
+    if(mgmtReassignToastTimer){ clearTimeout(mgmtReassignToastTimer); mgmtReassignToastTimer = null; }
+    if(mgmtReassignToast.style.display === 'none') return;
+    mgmtReassignToast.classList.add('hiding');
+    setTimeout(()=>{
+      mgmtReassignToast.style.display = 'none';
+      mgmtReassignToast.classList.remove('hiding');
+    }, 200); // アニメーション(mgmtToastOut)の長さに合わせる
+  }
+
+  // 何もしなければ数秒で自然に消える(見送り)。押した時だけ実行する — 常に画面を
+  // 占有する常設ボタンではなく、「その瞬間だけ」の合図にすることで、複数商品を
+  // まとめて直している最中に都度作業を止められることを避ける狙い(壁打ちの結論)。
+  function showMgmtReassignToast(){
+    if(mgmtReassignToastTimer) clearTimeout(mgmtReassignToastTimer);
+    mgmtReassignToast.classList.remove('hiding');
+    mgmtReassignToast.style.display = 'flex';
+    mgmtReassignToastTimer = setTimeout(hideMgmtReassignToast, 6000);
+  }
+
+  mgmtReassignToastBtn.addEventListener('click', async ()=>{
+    hideMgmtReassignToast();
+    await runMgmtFullReassign(true); // トースト自体が確認の役割を果たすため、確認ダイアログは省略
+  });
+
+  // トースト表示中はEnterキーでも「今すぐ再割当て」を実行できる。モーダルを
+  // Enterで閉じた直後、マウスに持ち替えずそのままもう一度Enterを押すだけで
+  // 反映まで完結する(作業効率化のリクエストに対応)。
+  // モーダル側のEnterはstopPropagation()されておりdocumentまで届かないため、
+  // 確定用のEnterとこのEnterが同一キー操作で二重発火することはない。
+  document.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter') return;
+    if(mgmtReassignToast.style.display === 'none') return;
+    const active = document.activeElement;
+    if(active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return; // 他の入力中は奪わない
+    e.preventDefault();
+    if(e.repeat) return; // 押しっぱなしでの連続実行を防止
+    mgmtReassignToastBtn.click();
+  });
+
   const modalMgmtInput = document.getElementById('modalMgmtInput');
   let modalMgmtSnapshotAtFocus = null;
   modalMgmtInput.addEventListener('input', ()=>{
@@ -4709,6 +4586,11 @@ const BRANCH_DEFAULTS = (function(){
         newDetected: modalItem.detectedMgmtNumber,
         newIncluded: modalItem.included
       }]);
+      // 番号自体が変わった(=起点として意味のある変更)時だけ、再割当て提案の対象にする。
+      // 「使用」チェックの解除だけの変更でトーストを出すのは的外れなため対象外にする。
+      if(modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber){
+        markMgmtUnreflected();
+      }
     }
     modalMgmtSnapshotAtFocus = null;
   });
@@ -4738,6 +4620,9 @@ const BRANCH_DEFAULTS = (function(){
 
   function openFineTuneModal(item, autoFocusMgmt){
     modalItem = item;
+    // 矢印キーでの連続編集(autoFocusMgmt=false)はセッション継続とみなし、
+    // それまでの変更フラグを引き継ぐ。新規に開いた時だけリセットする。
+    if(autoFocusMgmt) modalSessionHadMgmtChange = false;
     const ov = item.overrides || {bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null};
     modalOpenSnapshot = {bgTarget: ov.bgTarget, colorMatch: ov.colorMatch, autoCorrect: ov.autoCorrect, extraBoost: item.extraBoost || 1};
 
@@ -4804,6 +4689,10 @@ const BRANCH_DEFAULTS = (function(){
     if(modalItem) releaseFullResCanvas(modalItem);
     modalOverlay.style.display = 'none';
     modalItem = null;
+    if(modalSessionHadMgmtChange){
+      showMgmtReassignToast();
+      modalSessionHadMgmtChange = false;
+    }
   }
 
   const modalPrevBtn = document.getElementById('modalPrevBtn');
@@ -6974,6 +6863,13 @@ const BRANCH_DEFAULTS = (function(){
       performCropRedo,
       getHistoryStackLengths: () => ({undo: historyUndoStack.length, redo: historyRedoStack.length}),
       getHistoryUndoTypes: () => historyUndoStack.map(e => e.type),
+      // モーダル発の自動再割当て(壁打ちの結論で実装したテスト機能)の検証用。
+      // showMgmtReassignToast自体はモーダルのクローズ経路に組み込まれているため、
+      // ここではその先で実際に呼ばれるrunMgmtFullReassignと、強調表示フラグの
+      // 更新・解除だけを個別に検証できるようにする。
+      runMgmtFullReassign,
+      markMgmtUnreflected,
+      getMgmtHasUnreflectedChanges: () => mgmtHasUnreflectedChanges,
     };
   }
 
