@@ -1753,13 +1753,63 @@ const BRANCH_DEFAULTS = (function(){
                               // cancelled and stop adding items partway through
   let mgmtAutoAssignRanForThisBatch = false; // reset whenever new files are added, so freshly-added tags get picked up too
 
+  // 一度書き出したZIP(管理番号_枝番.jpg、または管理番号_QR.jpg の形式)を再度
+  // 読み込んだ時、ファイル名から管理番号を復元し、QRの再撮影や再読み取り無しで
+  // 続きから編集できるようにする。QRコード検出(scanForMgmtQR)と同じ基準
+  // (4桁以上の数字)を管理番号とみなし、検出できたものは基準(起点)として扱う。
+  //
+  // ただし「_01」「_02」のような連番サフィックスと「_QR」サフィックスは区別する。
+  // detectedMgmtNumberは元々「起点(伝播の基準)」と「QRタグ写真そのもの」の
+  // 両方の意味を兼ねていたため、連番の写真(=タグ写真ではない通常の商品写真)まで
+  // 起点として復元すると、書き出し時のサフィックス割り当て(computeMgmtSuffixMap)が
+  // 「detectedMgmtNumberがある=QRタグ写真」と誤認し、連番のはずの写真が全て
+  // 「_QR」サフィックスになってしまう(実際に発生した不具合)。
+  // これを避けるため、連番由来の場合はisTagSuffix:falseを返し、呼び出し側で
+  // item.restoredFromFilenameを立てて「タグ写真ではない起点」として区別する。
+  const EXPORTED_FILENAME_RE = /^(\d{4,})_(\d{2,}|QR)(?:-\d+)?\.(?:jpe?g|png|webp)$/i;
+  function detectMgmtNumberFromFilename(filename){
+    const m = EXPORTED_FILENAME_RE.exec(filename || '');
+    if(!m) return null;
+    return {number: m[1], isTagSuffix: /^QR$/i.test(m[2])};
+  }
+
   function addItemsFromFiles(files){
     mgmtAutoAssignRanForThisBatch = false;
     files.forEach(f=>{
       const id = 'img'+(idSeq++);
       const item = {id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null, included:true, rotation:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null}};
+      const restored = detectMgmtNumberFromFilename(f.name);
+      if(restored){
+        item.mgmtNumber = restored.number;
+        if(restored.isTagSuffix){
+          // 元々「_QR」で書き出されていた=本物のタグ写真が再度混入したケース。
+          // 実際のQR検出と全く同じ扱いにする(使用チェックを自動OFF、次回書き出しでも
+          // QRサフィックスを維持)。タグ写真は1商品につき通常1枚しかないため、
+          // 起点フラグは無条件に立てる。
+          item.detectedMgmtNumber = restored.number;
+          item.included = false;
+        }else{
+          // 「_01」「_02」のような連番由来。QRタグ写真は既に書き出し時点で除外されて
+          // いるはずなので、再インポートした連番写真の中に「本物の起点」に相当する
+          // ものは1枚も無い。そのため1枚目も含めて起点(detectedMgmtNumber、🏷バッジ)は
+          // 一切立てない — 管理番号の表示(mgmtNumber)だけ復元する。
+          // ただし「再割当て」実行時に番号が上書きされないための保護は別途必要なため、
+          // restoredFromFilenameは引き続き立てる(computeMgmtAssignment側で、この
+          // フラグを起点相当として扱うよう対応済み)。
+          item.restoredFromFilename = true;
+          item.included = false;
+        }
+      }
       items.push(item);
-      renderCard(item);
+      renderCard(item); // item.mgmtNumberがこの時点で入っていれば、カードにもそのまま反映される
+      if(restored){
+        if(item.detectedMgmtNumber) updateMgmtQrBadge(item);
+        // isTagSuffix(本物のタグ写真)・連番由来のどちらも、この時点ではincluded=falseなので
+        // 見た目(チェック・除外表示)も揃える
+        const chk = item.cardEl && item.cardEl.querySelector('.chk');
+        if(chk) chk.checked = false;
+        item.cardEl.classList.add('excluded');
+      }
       item.cardEl.classList.add('processing');
       enqueueProcessing(item);
     });
@@ -2069,6 +2119,7 @@ const BRANCH_DEFAULTS = (function(){
         e.stopPropagation();
         const dir = parseInt(btn.dataset.dir, 10);
         item.rotation = ((item.rotation || 0) + dir*90 + 360) % 360;
+        markEditedIfRestored(item);
         // a pending (drawn-but-unconfirmed) range was measured against the
         // OLD rotation — rather than risk silently confirming a now-wrong
         // region later, just discard it and let the person redraw
@@ -3640,9 +3691,21 @@ const BRANCH_DEFAULTS = (function(){
   // photo from scratch — for after manually fixing/adding missed anchors,
   // when photos downstream may be carrying a wrong number that a fill-only
   // pass would never correct.
+  // 「起点」とみなす条件: QRで実際に検出済み、手動で確定済み(detectedMgmtNumber)に
+  // 加えて、ファイル名から復元された写真(restoredFromFilename)も含める。
+  // 再インポートした連番写真はバッジ(detectedMgmtNumber)こそ立てないが
+  // 番号自体は信頼できる情報のため、これが無いと「再割当て」実行時に前の商品の
+  // 番号で上書きされてしまう(実際の被害はまだ出ていないが、事前に対応)。
+  function isMgmtAnchor(it){
+    return !!(it.detectedMgmtNumber || it.restoredFromFilename);
+  }
+  function anchorNumberOf(it){
+    return it.detectedMgmtNumber || it.mgmtNumber;
+  }
+
   function computeMgmtAssignment(overwrite, forcedTagFirstMode){
     if(!items.length) return {changes: [], groupCount: 0};
-    const tagFirstMode = forcedTagFirstMode != null ? forcedTagFirstMode : !!items[0].detectedMgmtNumber;
+    const tagFirstMode = forcedTagFirstMode != null ? forcedTagFirstMode : isMgmtAnchor(items[0]);
     const changes = [];
     let groupCount = 0;
 
@@ -3658,8 +3721,8 @@ const BRANCH_DEFAULTS = (function(){
     if(tagFirstMode){
       let currentNumber = null;
       items.forEach(it=>{
-        if(it.detectedMgmtNumber){
-          currentNumber = it.detectedMgmtNumber;
+        if(isMgmtAnchor(it)){
+          currentNumber = anchorNumberOf(it);
           groupCount++;
           maybeAssign(it, currentNumber); // the anchor's OWN number field also needs setting — scanForMgmtQR only sets detectedMgmtNumber, never mgmtNumber itself
           return;
@@ -3670,8 +3733,8 @@ const BRANCH_DEFAULTS = (function(){
       let currentNumber = null;
       for(let i = items.length - 1; i >= 0; i--){
         const it = items[i];
-        if(it.detectedMgmtNumber){
-          currentNumber = it.detectedMgmtNumber;
+        if(isMgmtAnchor(it)){
+          currentNumber = anchorNumberOf(it);
           groupCount++;
           maybeAssign(it, currentNumber);
           continue;
@@ -3756,6 +3819,23 @@ const BRANCH_DEFAULTS = (function(){
     }
   }
 
+  // 再インポート(ファイル名復元)された写真は「使用」チェックが自動でOFFになっている
+  // (壁打ちの結論)。この写真に実際に加工(トリミング・回転・ぼかし・明るさ/色味調整・
+  // 管理番号の手動修正)が入った時点で、自動的に「使用」チェックをONに戻す。
+  // 複製操作自体(duplicateItem)は対象外(複製元のitemに対してこの関数を呼ばない)。
+  // 呼び出し側で「対象の写真がrestoredFromFilenameで、かつ現在OFFの時だけ」判定して
+  // 呼ぶこと(通常の新規写真にまで無駄なDOM更新をしないため)。
+  function markEditedIfRestored(item){
+    if(!item || !item.restoredFromFilename || item.included) return;
+    item.included = true;
+    if(item.cardEl){
+      const chk = item.cardEl.querySelector('.chk');
+      if(chk) chk.checked = true;
+      item.cardEl.classList.remove('excluded');
+    }
+    updateStatus();
+  }
+
   // Groups items by 管理番号, preserving grid order, and returns a Map of
   // item -> its 1-based position within its own group. Used at download time
   // so suffixes always run _01.._0N with no gaps, whatever happened earlier
@@ -3773,7 +3853,11 @@ const BRANCH_DEFAULTS = (function(){
     const result = new Map();
     list.forEach(it=>{
       const key = it.mgmtNumber || '';
-      if(it.detectedMgmtNumber){
+      // detectedMgmtNumberがあっても、ファイル名の連番から復元しただけの
+      // (=本物のQRタグ写真ではない)場合は、QRサフィックスにせず連番の対象に含める。
+      // そうしないと、再インポートした通常の商品写真が全て「管理番号_QR.jpg」に
+      // なってしまい、連番が維持されない(実際に発生した不具合)。
+      if(it.detectedMgmtNumber && !it.restoredFromFilename){
         result.set(it, 'QR');
         return;
       }
@@ -4430,6 +4514,7 @@ const BRANCH_DEFAULTS = (function(){
   extraBoostEl.addEventListener('change', ()=>{
     if(!modalItem) return;
     modalItem.extraBoost = parseFloat(extraBoostEl.value) || 1;
+    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
   modalColorMatchEl.addEventListener('change', ()=>{
@@ -4445,6 +4530,7 @@ const BRANCH_DEFAULTS = (function(){
     if(!modalAutoCorrectEnabledEl.checked){
       modalAutoCorrectEnabledEl.checked = true;
     }
+    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
   const modalAutoCorrectEnabledEl = document.getElementById('modalAutoCorrectEnabled');
@@ -4454,6 +4540,7 @@ const BRANCH_DEFAULTS = (function(){
     // colorMatch, this is a discrete on/off flip (not a continuous drag),
     // so just run the real computation immediately rather than leaving the
     // displayed image stale until some other control happens to trigger it
+    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
   let modalItem = null;
@@ -4576,6 +4663,11 @@ const BRANCH_DEFAULTS = (function(){
   });
   modalMgmtInput.addEventListener('blur', ()=>{
     if(!modalMgmtSnapshotAtFocus || !modalItem) return;
+    const numberChanged = modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber;
+    // includedの変化(markEditedIfRestoredによる自動ON)を、番号変更そのものと
+    // 同じUndo履歴1件にまとめるため、履歴を組み立てる前に呼ぶ。こうしておくと
+    // Ctrl+Zでこの編集を取り消した時、includedも元のOFF状態に一緒に戻る。
+    if(numberChanged) markEditedIfRestored(modalItem);
     if(modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber || modalMgmtSnapshotAtFocus.detectedMgmtNumber !== modalItem.detectedMgmtNumber || modalMgmtSnapshotAtFocus.included !== modalItem.included){
       pushMgmtHistoryEntry([{
         itemId: modalItem.id,
@@ -4588,7 +4680,7 @@ const BRANCH_DEFAULTS = (function(){
       }]);
       // 番号自体が変わった(=起点として意味のある変更)時だけ、再割当て提案の対象にする。
       // 「使用」チェックの解除だけの変更でトーストを出すのは的外れなため対象外にする。
-      if(modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber){
+      if(numberChanged){
         markMgmtUnreflected();
       }
     }
@@ -5018,6 +5110,7 @@ const BRANCH_DEFAULTS = (function(){
   modalBgOverride.addEventListener('change', ()=>{
     // fires once when the drag ends — now run the real computation so the
     // change is actually saved, not just approximated via CSS filter
+    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
 
@@ -5052,6 +5145,7 @@ const BRANCH_DEFAULTS = (function(){
     // cancel it rather than risk confirming a now-misaligned region later
     if(cropModeActive) cropCancelBtn.click();
     modalItem.rotation = ((modalItem.rotation || 0) - 90 + 360) % 360;
+    markEditedIfRestored(modalItem);
     const ok = await ensureBaseCanvasLoaded(modalItem);
     if(ok){
       applyRotation(modalItem);
@@ -5063,6 +5157,7 @@ const BRANCH_DEFAULTS = (function(){
     if(!modalItem) return;
     if(cropModeActive) cropCancelBtn.click();
     modalItem.rotation = ((modalItem.rotation || 0) + 90) % 360;
+    markEditedIfRestored(modalItem);
     const ok = await ensureBaseCanvasLoaded(modalItem);
     if(ok){
       applyRotation(modalItem);
@@ -5651,6 +5746,7 @@ const BRANCH_DEFAULTS = (function(){
       const canonicalFrac = rotatedFracToUnrotatedFrac(viewFrac, item.rotation || 0);
       item.blurRegions = item.blurRegions || [];
       item.blurRegions.push(canonicalFrac);
+      markEditedIfRestored(item);
       item.blurStrength = parseInt(blurStrengthEl.value, 10) || 15;
       pushHistoryEntry({type:'blur-add', itemId: item.id, region: {...canonicalFrac}});
 
@@ -5761,6 +5857,7 @@ const BRANCH_DEFAULTS = (function(){
         item.manualCrop = canonicalFrac;
       }
       item.cropRounds = (item.cropRounds || 0) + 1;
+      markEditedIfRestored(item);
       lastAppliedCropFrac = {...item.manualCrop};
 
       process(item); // also re-renders the thumbnail and clears 'processing' on success
@@ -5816,6 +5913,7 @@ const BRANCH_DEFAULTS = (function(){
       modalItem.manualCrop = canonicalFrac;
     }
     modalItem.cropRounds = (modalItem.cropRounds || 0) + 1;
+    markEditedIfRestored(modalItem);
     lastAppliedCropFrac = {...modalItem.manualCrop};
     cropPresetLastUsed.disabled = false;
     cropPresetLastUsed.title = '写真をCtrl+クリック(Macは⌘+クリック)すると、クリック位置を中心に同じサイズで即適用。Ctrl+ドラッグなら新しい範囲を選択できます';
@@ -6594,6 +6692,7 @@ const BRANCH_DEFAULTS = (function(){
     const canonicalFrac = rotatedFracToUnrotatedFrac(viewFrac, modalItem.rotation || 0);
     modalItem.blurRegions = modalItem.blurRegions || [];
     modalItem.blurRegions.push(canonicalFrac);
+    markEditedIfRestored(modalItem);
     renderBlurRegions();
     reprocessModalItem();
   });
@@ -6675,7 +6774,15 @@ const BRANCH_DEFAULTS = (function(){
 
     downloadBtn.disabled = true;
     const originalLabel = 'ZIPでダウンロード';
-    const mgmtSuffixMap = computeMgmtSuffixMap(included); // _01.._0N per 管理番号 group, gap-free
+    // 連番の採番対象は「使用チェックON」の写真に加えて、「使用はOFFだが再インポート
+    // 起点(restoredFromFilename)」の写真も含める。こうすることで、再インポートした
+    // 元の写真(使用OFFのまま残してある)が番号の「枠」を占有し続け、実際に書き出す
+    // 新規・編集済みの写真が続き番号(03・04...)から採番される(壁打ちの結論)。
+    // 一方、普段の「この1枚だけ要らない」という単純な使用チェックOFF(起点ではない)は
+    // 従来通りカウント対象から外れ、書き出されるファイルの番号に隙間ができないよう
+    // 詰めて振られる(この挙動は変更しない)。
+    const suffixCountingList = items.filter(it => it.included || it.restoredFromFilename);
+    const mgmtSuffixMap = computeMgmtSuffixMap(suffixCountingList); // _01.._0N per 管理番号 group, gap-free
     const usedNames = new Set();
 
     // ===== CSV未読み込みでのダウンロード事故防止 =====
@@ -6870,6 +6977,8 @@ const BRANCH_DEFAULTS = (function(){
       runMgmtFullReassign,
       markMgmtUnreflected,
       getMgmtHasUnreflectedChanges: () => mgmtHasUnreflectedChanges,
+      detectMgmtNumberFromFilename,
+      markEditedIfRestored,
     };
   }
 
