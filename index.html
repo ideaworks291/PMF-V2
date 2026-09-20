@@ -1793,19 +1793,20 @@ const BRANCH_DEFAULTS = (function(){
           // いるはずなので、再インポートした連番写真の中に「本物の起点」に相当する
           // ものは1枚も無い。そのため1枚目も含めて起点(detectedMgmtNumber、🏷バッジ)は
           // 一切立てない — 管理番号の表示(mgmtNumber)だけ復元する。
-          // ただし「再割当て」実行時に番号が上書きされないための保護は別途必要なため、
-          // restoredFromFilenameは引き続き立てる(computeMgmtAssignment側で、この
-          // フラグを起点相当として扱うよう対応済み)。
+          // 「使用」はデフォルトのtrueのまま変更しない(壁打ちの結論:再インポートは
+          // 「10枚分の並び・加工具合をまとめて確認する」運用が中心のため、グループ
+          // 全体をそのまま書き出し対象にしておく方が実態に合う)。
+          // 「再割当て」実行時に番号が上書きされないための保護だけは引き続き必要なため、
+          // restoredFromFilenameは立てる(computeMgmtAssignment側で、このフラグを
+          // 起点相当として扱うよう対応済み)。
           item.restoredFromFilename = true;
-          item.included = false;
         }
       }
       items.push(item);
       renderCard(item); // item.mgmtNumberがこの時点で入っていれば、カードにもそのまま反映される
-      if(restored){
-        if(item.detectedMgmtNumber) updateMgmtQrBadge(item);
-        // isTagSuffix(本物のタグ写真)・連番由来のどちらも、この時点ではincluded=falseなので
-        // 見た目(チェック・除外表示)も揃える
+      if(restored && restored.isTagSuffix){
+        // 本物のタグ写真の場合だけ、見た目(チェック・除外表示)も除外状態に揃える
+        updateMgmtQrBadge(item);
         const chk = item.cardEl && item.cardEl.querySelector('.chk');
         if(chk) chk.checked = false;
         item.cardEl.classList.add('excluded');
@@ -2119,7 +2120,6 @@ const BRANCH_DEFAULTS = (function(){
         e.stopPropagation();
         const dir = parseInt(btn.dataset.dir, 10);
         item.rotation = ((item.rotation || 0) + dir*90 + 360) % 360;
-        markEditedIfRestored(item);
         // a pending (drawn-but-unconfirmed) range was measured against the
         // OLD rotation — rather than risk silently confirming a now-wrong
         // region later, just discard it and let the person redraw
@@ -3819,23 +3819,6 @@ const BRANCH_DEFAULTS = (function(){
     }
   }
 
-  // 再インポート(ファイル名復元)された写真は「使用」チェックが自動でOFFになっている
-  // (壁打ちの結論)。この写真に実際に加工(トリミング・回転・ぼかし・明るさ/色味調整・
-  // 管理番号の手動修正)が入った時点で、自動的に「使用」チェックをONに戻す。
-  // 複製操作自体(duplicateItem)は対象外(複製元のitemに対してこの関数を呼ばない)。
-  // 呼び出し側で「対象の写真がrestoredFromFilenameで、かつ現在OFFの時だけ」判定して
-  // 呼ぶこと(通常の新規写真にまで無駄なDOM更新をしないため)。
-  function markEditedIfRestored(item){
-    if(!item || !item.restoredFromFilename || item.included) return;
-    item.included = true;
-    if(item.cardEl){
-      const chk = item.cardEl.querySelector('.chk');
-      if(chk) chk.checked = true;
-      item.cardEl.classList.remove('excluded');
-    }
-    updateStatus();
-  }
-
   // Groups items by 管理番号, preserving grid order, and returns a Map of
   // item -> its 1-based position within its own group. Used at download time
   // so suffixes always run _01.._0N with no gaps, whatever happened earlier
@@ -3848,6 +3831,28 @@ const BRANCH_DEFAULTS = (function(){
   // group is numbered 01, 02, 03... in on-screen order, skipping over the
   // anchor rather than counting it — so the numbering reads the same way
   // whether the tag is 先頭固定 or 末尾固定.
+  // 再インポートされた写真(restoredFromFilename)のうち、実際に画素データへの
+  // 加工が一切入っていないものを判定する。真の場合、書き出し時にCanvasへの
+  // 再描画・JPEG再エンコードを一切行わず、元のファイルのバイト列をそのまま
+  // ZIPに詰めることで、劣化(世代損失・明るさ補正の再適用)をゼロにする(壁打ちの結論)。
+  // 「使用」チェックの状態や管理番号の修正は、画素データを変えないため対象外
+  // (判定基準に含めない) — チェックだけ手動で入れ直した写真まで誤って
+  // 再エンコード対象にしないための配慮。
+  function isUntouchedRestoredPhoto(item){
+    if(!item.restoredFromFilename) return false;
+    if(item.manualCrop) return false;
+    if(item.rotation) return false;
+    if(item.blurRegions && item.blurRegions.length) return false;
+    if(item.extraBoost && item.extraBoost !== 1) return false;
+    const ov = item.overrides || {};
+    if(ov.bgTarget != null || ov.headroom != null || ov.colorMatch != null || ov.autoCorrect != null) return false;
+    // 念のための安全策: 元ファイルが本当にJPEGでなければバイト列をそのまま
+    // .jpgとして詰めると中身と拡張子が食い違ってしまうため、その場合は
+    // 通常の処理(再エンコード)にフォールバックする
+    if(item.file && item.file.type && item.file.type !== 'image/jpeg') return false;
+    return true;
+  }
+
   function computeMgmtSuffixMap(list){
     const counters = new Map();
     const result = new Map();
@@ -4514,7 +4519,6 @@ const BRANCH_DEFAULTS = (function(){
   extraBoostEl.addEventListener('change', ()=>{
     if(!modalItem) return;
     modalItem.extraBoost = parseFloat(extraBoostEl.value) || 1;
-    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
   modalColorMatchEl.addEventListener('change', ()=>{
@@ -4530,7 +4534,6 @@ const BRANCH_DEFAULTS = (function(){
     if(!modalAutoCorrectEnabledEl.checked){
       modalAutoCorrectEnabledEl.checked = true;
     }
-    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
   const modalAutoCorrectEnabledEl = document.getElementById('modalAutoCorrectEnabled');
@@ -4540,7 +4543,6 @@ const BRANCH_DEFAULTS = (function(){
     // colorMatch, this is a discrete on/off flip (not a continuous drag),
     // so just run the real computation immediately rather than leaving the
     // displayed image stale until some other control happens to trigger it
-    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
   let modalItem = null;
@@ -4664,10 +4666,6 @@ const BRANCH_DEFAULTS = (function(){
   modalMgmtInput.addEventListener('blur', ()=>{
     if(!modalMgmtSnapshotAtFocus || !modalItem) return;
     const numberChanged = modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber;
-    // includedの変化(markEditedIfRestoredによる自動ON)を、番号変更そのものと
-    // 同じUndo履歴1件にまとめるため、履歴を組み立てる前に呼ぶ。こうしておくと
-    // Ctrl+Zでこの編集を取り消した時、includedも元のOFF状態に一緒に戻る。
-    if(numberChanged) markEditedIfRestored(modalItem);
     if(modalMgmtSnapshotAtFocus.mgmtNumber !== modalItem.mgmtNumber || modalMgmtSnapshotAtFocus.detectedMgmtNumber !== modalItem.detectedMgmtNumber || modalMgmtSnapshotAtFocus.included !== modalItem.included){
       pushMgmtHistoryEntry([{
         itemId: modalItem.id,
@@ -5110,7 +5108,6 @@ const BRANCH_DEFAULTS = (function(){
   modalBgOverride.addEventListener('change', ()=>{
     // fires once when the drag ends — now run the real computation so the
     // change is actually saved, not just approximated via CSS filter
-    markEditedIfRestored(modalItem);
     reprocessModalItem();
   });
 
@@ -5145,7 +5142,6 @@ const BRANCH_DEFAULTS = (function(){
     // cancel it rather than risk confirming a now-misaligned region later
     if(cropModeActive) cropCancelBtn.click();
     modalItem.rotation = ((modalItem.rotation || 0) - 90 + 360) % 360;
-    markEditedIfRestored(modalItem);
     const ok = await ensureBaseCanvasLoaded(modalItem);
     if(ok){
       applyRotation(modalItem);
@@ -5157,7 +5153,6 @@ const BRANCH_DEFAULTS = (function(){
     if(!modalItem) return;
     if(cropModeActive) cropCancelBtn.click();
     modalItem.rotation = ((modalItem.rotation || 0) + 90) % 360;
-    markEditedIfRestored(modalItem);
     const ok = await ensureBaseCanvasLoaded(modalItem);
     if(ok){
       applyRotation(modalItem);
@@ -5746,7 +5741,6 @@ const BRANCH_DEFAULTS = (function(){
       const canonicalFrac = rotatedFracToUnrotatedFrac(viewFrac, item.rotation || 0);
       item.blurRegions = item.blurRegions || [];
       item.blurRegions.push(canonicalFrac);
-      markEditedIfRestored(item);
       item.blurStrength = parseInt(blurStrengthEl.value, 10) || 15;
       pushHistoryEntry({type:'blur-add', itemId: item.id, region: {...canonicalFrac}});
 
@@ -5857,7 +5851,6 @@ const BRANCH_DEFAULTS = (function(){
         item.manualCrop = canonicalFrac;
       }
       item.cropRounds = (item.cropRounds || 0) + 1;
-      markEditedIfRestored(item);
       lastAppliedCropFrac = {...item.manualCrop};
 
       process(item); // also re-renders the thumbnail and clears 'processing' on success
@@ -5913,7 +5906,6 @@ const BRANCH_DEFAULTS = (function(){
       modalItem.manualCrop = canonicalFrac;
     }
     modalItem.cropRounds = (modalItem.cropRounds || 0) + 1;
-    markEditedIfRestored(modalItem);
     lastAppliedCropFrac = {...modalItem.manualCrop};
     cropPresetLastUsed.disabled = false;
     cropPresetLastUsed.title = '写真をCtrl+クリック(Macは⌘+クリック)すると、クリック位置を中心に同じサイズで即適用。Ctrl+ドラッグなら新しい範囲を選択できます';
@@ -6692,7 +6684,6 @@ const BRANCH_DEFAULTS = (function(){
     const canonicalFrac = rotatedFracToUnrotatedFrac(viewFrac, modalItem.rotation || 0);
     modalItem.blurRegions = modalItem.blurRegions || [];
     modalItem.blurRegions.push(canonicalFrac);
-    markEditedIfRestored(modalItem);
     renderBlurRegions();
     reprocessModalItem();
   });
@@ -6774,15 +6765,7 @@ const BRANCH_DEFAULTS = (function(){
 
     downloadBtn.disabled = true;
     const originalLabel = 'ZIPでダウンロード';
-    // 連番の採番対象は「使用チェックON」の写真に加えて、「使用はOFFだが再インポート
-    // 起点(restoredFromFilename)」の写真も含める。こうすることで、再インポートした
-    // 元の写真(使用OFFのまま残してある)が番号の「枠」を占有し続け、実際に書き出す
-    // 新規・編集済みの写真が続き番号(03・04...)から採番される(壁打ちの結論)。
-    // 一方、普段の「この1枚だけ要らない」という単純な使用チェックOFF(起点ではない)は
-    // 従来通りカウント対象から外れ、書き出されるファイルの番号に隙間ができないよう
-    // 詰めて振られる(この挙動は変更しない)。
-    const suffixCountingList = items.filter(it => it.included || it.restoredFromFilename);
-    const mgmtSuffixMap = computeMgmtSuffixMap(suffixCountingList); // _01.._0N per 管理番号 group, gap-free
+    const mgmtSuffixMap = computeMgmtSuffixMap(included); // _01.._0N per 管理番号 group, gap-free
     const usedNames = new Set();
 
     // ===== CSV未読み込みでのダウンロード事故防止 =====
@@ -6844,6 +6827,17 @@ const BRANCH_DEFAULTS = (function(){
       }
 
       async function processOneForExport(item, idx){
+        const name = computeExportName(item, idx);
+        if(isUntouchedRestoredPhoto(item)){
+          // 無加工の再インポート写真は、Canvasのデコード・再描画・JPEG再エンコードを
+          // 一切経由せず、元のファイルのバイト列をそのままZIPに詰める。並び替えだけ
+          // 行った場合もここに該当するため、結果的に「リネームのみ」の動きになる。
+          zip.file(name, item.file);
+          lastEntryName = name;
+          completedCount++;
+          downloadBtn.textContent = `生成中… (${completedCount}/${included.length})`;
+          return;
+        }
         const ok = await ensureBaseCanvasLoaded(item);
         if(!ok){
           console.error('[download] could not regenerate canvas for', item.file.name);
@@ -6859,7 +6853,6 @@ const BRANCH_DEFAULTS = (function(){
         // the cached JPEG) if this photo is rotated, fine-tuned, or
         // downloaded again later
         releaseFullResCanvas(item);
-        const name = computeExportName(item, idx);
         zip.file(name, blob);
         lastEntryName = name;
         completedCount++;
@@ -6977,8 +6970,8 @@ const BRANCH_DEFAULTS = (function(){
       runMgmtFullReassign,
       markMgmtUnreflected,
       getMgmtHasUnreflectedChanges: () => mgmtHasUnreflectedChanges,
+      isUntouchedRestoredPhoto,
       detectMgmtNumberFromFilename,
-      markEditedIfRestored,
     };
   }
 
