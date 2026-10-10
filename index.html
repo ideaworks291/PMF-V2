@@ -458,6 +458,33 @@ const BRANCH_DEFAULTS = (function(){
     return regions.map(r => regionsMatch(r, region)).lastIndexOf(true);
   }
 
+  // 「まっすぐにする(傾き補正)」で安全に許可する角度の範囲(度)。
+  // ラベル撮影時のちょっとした傾きを直す用途を想定しており、大きく回したい場合は
+  // 従来通り90度単位の回転ボタンを使う想定なので、ここは控えめな範囲にしてある。
+  const STRAIGHTEN_MAX_DEG = 15;
+
+  // スライダー等からの入力値を、安全な範囲(±STRAIGHTEN_MAX_DEG度)・0.1度刻みに丸める。
+  function clampStraightenDeg(deg){
+    const n = Number(deg);
+    if(!Number.isFinite(n)) return 0;
+    const clamped = Math.max(-STRAIGHTEN_MAX_DEG, Math.min(STRAIGHTEN_MAX_DEG, n));
+    // 浮動小数の誤差で 1.2000000000000002 のような値にならないよう、0.1度単位に丸める
+    return Math.round(clamped * 10) / 10;
+  }
+
+  // w×hの画像をangleDeg度だけ回転させたとき、はみ出さずに収まる(=四隅が欠けない)
+  // 新しいキャンバスの幅・高さを返す。「まっすぐにする」機能で、回転後に生じる
+  // 透明/はみ出し部分を避けるため、描画先のキャンバス自体をこのサイズまで広げて使う。
+  function computeStraightenedCanvasSize(w, h, angleDeg){
+    if(!angleDeg) return {width: Math.round(w), height: Math.round(h)};
+    const rad = angleDeg * Math.PI / 180;
+    const cos = Math.abs(Math.cos(rad));
+    const sin = Math.abs(Math.sin(rad));
+    const width = Math.ceil(w * cos + h * sin);
+    const height = Math.ceil(w * sin + h * cos);
+    return {width, height};
+  }
+
   return {
     normalizeRotation,
     rotateBy,
@@ -468,6 +495,9 @@ const BRANCH_DEFAULTS = (function(){
     composeCrop,
     computeCenteredViewRect,
     centerLastCropOnClick,
+    STRAIGHTEN_MAX_DEG,
+    clampStraightenDeg,
+    computeStraightenedCanvasSize,
   };
 });
 
@@ -2231,6 +2261,21 @@ const BRANCH_DEFAULTS = (function(){
     pointer-events:none;
     z-index:4;
   }
+  .straighten-grid{
+    position:absolute;
+    pointer-events:none;
+    z-index:3;
+    background-image:
+      linear-gradient(rgba(255,255,255,.55) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.55) 1px, transparent 1px);
+    background-size:33.333% 33.333%;
+    box-shadow:0 0 0 1px rgba(255,255,255,.55) inset;
+  }
+  .straighten-grid.fine{
+    /* 90度回転ボタン横の▲▼で1度刻みの微調整をしている間は、3分割だと傾きの
+       ズレが分かりにくいため、より細かい格子にして見比べやすくする */
+    background-size:10% 10%;
+  }
   .ba-label{
     position:absolute;
     display:none;
@@ -2384,8 +2429,7 @@ const BRANCH_DEFAULTS = (function(){
     box-shadow:0 4px 16px rgba(0,0,0,.5);
   }
   .modal-rotate{
-    position:absolute;bottom:10px;left:10px;
-    display:flex;gap:6px;
+    display:flex;justify-content:center;gap:6px;flex-wrap:wrap;
   }
   .modal-rotate button{
     background:rgba(10,13,16,.8);
@@ -2397,6 +2441,14 @@ const BRANCH_DEFAULTS = (function(){
   }
   .modal-rotate button svg{width:23px;height:23px;flex-shrink:0;}
   .modal-rotate button:hover{background:var(--accent);color:#ffffff;border-color:var(--accent);}
+  .straighten-nudge-val{
+    display:flex;align-items:center;justify-content:center;
+    min-width:34px;height:34px;box-sizing:border-box;
+    background:rgba(10,13,16,.8);
+    border:1px solid rgba(255,255,255,.15);border-radius:6px;
+    color:var(--text);font-size:12px;font-weight:700;
+    padding:0 6px;white-space:nowrap;
+  }
   .modal-controls{
     flex:1 1 360px;
     display:flex;flex-direction:column;gap:16px;
@@ -2673,6 +2725,7 @@ const BRANCH_DEFAULTS = (function(){
         <button id="modalPrevBtn" class="modal-nav-btn modal-nav-prev" type="button" title="前の写真">‹</button>
         <button id="modalNextBtn" class="modal-nav-btn modal-nav-next" type="button" title="次の写真">›</button>
         <img id="modalImg" alt="">
+        <div class="straighten-grid" id="straightenGrid" style="display:none;"></div>
         <img id="modalImgBefore" alt="" class="modal-img-before">
         <div class="ba-divider" id="baDivider"></div>
         <div class="ba-label ba-label-before" id="baLabelBefore">補正前</div>
@@ -2697,13 +2750,35 @@ const BRANCH_DEFAULTS = (function(){
         </div>
         <div class="blur-overlay" id="blurOverlay"></div>
         <div class="ctrl-crop-preview" id="ctrlCropPreview" style="display:none;"></div>
+        </div>
         <div class="modal-rotate">
           <button id="modalRotateLeft" type="button" title="反時計回りに90度回転"><svg viewBox="0 0 24 24" width="100%" height="100%"><path d="M17 3H5V9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 9L9 9L5 14Z" fill="currentColor" stroke="none"/><rect x="10" y="10" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
           <button id="modalRotateRight" type="button" title="時計回りに90度回転"><svg viewBox="0 0 24 24" width="100%" height="100%"><path d="M7 3H19V9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M23 9L15 9L19 14Z" fill="currentColor" stroke="none"/><rect x="2" y="10" width="12" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2.2"/></svg></button>
-        </div>
+          <span class="straighten-nudge-val" id="straightenNudgeVal" title="グリッドと見比べながら0.5度ずつ傾きを補正">0.0°</span>
+          <button id="straightenNudgeDown" type="button" title="0.5度ずつ反時計回りに補正(-0.5°)">▼</button>
+          <button id="straightenNudgeUp" type="button" title="0.5度ずつ時計回りに補正(+0.5°)">▲</button>
+          <button id="straightenNudgeResetBtn" type="button" title="傾き補正を0度に戻す">↺</button>
         </div>
       </div>
       <div class="modal-controls">
+        <div class="ctrl">
+          <button class="section-toggle" type="button" id="straightenSectionToggle">
+            <span class="caret">▶</span>
+            <span>まっすぐにする(傾き補正)</span>
+            <span class="hint">ラベル撮影時の傾きなど</span>
+          </button>
+          <div class="section-body" id="straightenSectionBody">
+            <div class="valline"><span>-15°</span><span id="straightenVal">0.0°</span><span>+15°</span></div>
+            <input type="range" id="straightenSlider" min="-15" max="15" step="0.1" value="0">
+            <div class="btnrow" style="margin-top:10px;">
+              <button id="straightenResetBtn" type="button">0度に戻す</button>
+            </div>
+            <div class="toggle-row" style="margin-top:8px;">
+              <input type="checkbox" id="straightenGridToggle" checked>
+              <span>整列ガイド(グリッド)を表示</span>
+            </div>
+          </div>
+        </div>
         <div class="ctrl">
           <button class="section-toggle" type="button" id="cropSectionToggle">
             <span class="caret">▶</span>
@@ -3041,7 +3116,8 @@ const BRANCH_DEFAULTS = (function(){
   const PhotoGeometry = window.PhotoGeometry;
   if(!PhotoGeometry) throw new Error('photo-geometry.js が読み込まれていません。HTML本体と同じ場所にphoto-geometry.jsを置いてください。');
   const {rotateBy, rotatedFracToUnrotatedFrac, unrotatedFracToRotatedFrac, composeCrop,
-         computeCenteredViewRect, centerLastCropOnClick, findRegionIndex} = PhotoGeometry;
+         computeCenteredViewRect, centerLastCropOnClick, findRegionIndex,
+         STRAIGHTEN_MAX_DEG, clampStraightenDeg, computeStraightenedCanvasSize} = PhotoGeometry;
 
   // Undo/Redo履歴のスタック管理とエントリ生成は photo-history.js に切り出し済み。
   // (履歴を実際に適用する処理は、DOM・Canvasと密結合のためこのファイルに残している)
@@ -3262,7 +3338,7 @@ const BRANCH_DEFAULTS = (function(){
     mgmtAutoAssignRanForThisBatch = false;
     files.forEach(f=>{
       const id = 'img'+(idSeq++);
-      const item = {id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null, included:true, rotation:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null}};
+      const item = {id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null, included:true, rotation:0, straightenDeg:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null}};
       const restored = detectMgmtNumberFromFilename(f.name);
       if(restored){
         item.mgmtNumber = restored.number;
@@ -3318,7 +3394,7 @@ const BRANCH_DEFAULTS = (function(){
     const id = 'img'+(idSeq++);
     const newItem = {
       id, file: sourceItem.file, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null,
-      included:true, rotation: sourceItem.rotation || 0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15,
+      included:true, rotation: sourceItem.rotation || 0, straightenDeg: sourceItem.straightenDeg || 0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15,
       extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null,
       overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
       mgmtNumber: sourceItem.mgmtNumber || '', detectedMgmtNumber: null
@@ -3351,18 +3427,63 @@ const BRANCH_DEFAULTS = (function(){
   // without the person needing to type it in by hand.
   let insertAfterItem = null;
   const insertFileInput = document.createElement('input');
+  insertFileInput.id = 'insertFileInput'; // テスト・自動操作から特定しやすいようにid付与(挙動には影響しない)
   insertFileInput.type = 'file';
   insertFileInput.multiple = true;
-  insertFileInput.accept = 'image/*,.webp,.heic,.heif';
+  insertFileInput.accept = 'image/*,.webp,.heic,.heif,.zip,application/zip';
   insertFileInput.style.display = 'none';
   document.body.appendChild(insertFileInput);
 
-  insertFileInput.addEventListener('change', ()=>{
-    const files = Array.from(insertFileInput.files || []);
+  insertFileInput.addEventListener('change', async ()=>{
+    const rawFiles = Array.from(insertFileInput.files || []);
     insertFileInput.value = ''; // reset so picking the exact same file(s) again still fires 'change' next time
     const afterItem = insertAfterItem;
     insertAfterItem = null;
-    if(files.length && afterItem) insertItemsAfter(files, afterItem);
+    if(!rawFiles.length || !afterItem) return;
+
+    // メインのドロップゾーン(handleFiles)と同じ基準でZIPと画像を仕分ける。
+    // ZIPが混ざっていなければ、これまで通り即座に挿入(体感を変えない)。
+    const zipFiles = rawFiles.filter(isZip);
+    zipFiles.sort((a,b)=>naturalCompare(a.name, b.name));
+    let plainImageFiles = rawFiles.filter(f=>!isZip(f) && (f.type.startsWith('image/') || isHeic(f)));
+    plainImageFiles.sort((a,b)=>naturalCompare(a.name, b.name));
+    plainImageFiles = reorderForNumberWraparound(plainImageFiles, f=>f.name);
+    const unrecognized = rawFiles.filter(f=>!isZip(f) && !f.type.startsWith('image/') && !isHeic(f));
+
+    if(unrecognized.length){
+      zipStatusEl.style.display = 'flex';
+      zipStatusEl.innerHTML = `<span class="warn">⚠</span> 認識できない形式のためスキップ: ${unrecognized.map(f=>f.name).join(', ')}`;
+    }
+
+    if(!zipFiles.length){
+      if(plainImageFiles.length) insertItemsAfter(plainImageFiles, afterItem);
+      return;
+    }
+
+    // ZIPが含まれる場合は、挿入順(この写真の直後、を保つ)のため、
+    // 全て展開し終えてから1回でまとめてinsertItemsAfterに渡す
+    // (handleFilesのように展開しながら逐次追加すると、挿入順がズレてしまうため)。
+    const allFiles = [...plainImageFiles];
+    for(const zf of zipFiles){
+      zipStatusEl.style.display = 'flex';
+      delete zipStatusEl.dataset.done;
+      zipStatusEl.innerHTML = `<span class="spinner"></span> ZIP読み込み中: <span class="n">${zf.name}</span> (${(zf.size/1024/1024).toFixed(1)}MB)`;
+      try{
+        const extracted = await expandZip(zf, (done,total)=>{
+          zipStatusEl.innerHTML = `<span class="spinner"></span> ZIP展開中: <span class="n">${zf.name}</span> (${done}/${total})`;
+        });
+        allFiles.push(...extracted);
+        if(extracted.length){
+          zipStatusEl.innerHTML = `<span class="ok">✓</span> ${zf.name}: 画像 <span class="n">${extracted.length}</span>件を展開しました`;
+        }else{
+          zipStatusEl.innerHTML = `<span class="warn">⚠</span> ${zf.name}: 対応する画像ファイル(jpg/png/webp/heic)が見つかりませんでした`;
+        }
+      }catch(err){
+        console.error('[insertFileInput] zip processing error:', zf.name, err);
+        zipStatusEl.innerHTML = `<span class="warn">⚠</span> ${zf.name}: 展開に失敗しました(${err.message})`;
+      }
+    }
+    if(allFiles.length) insertItemsAfter(allFiles, afterItem);
   });
 
   function insertItemsAfter(files, afterItem){
@@ -3374,7 +3495,7 @@ const BRANCH_DEFAULTS = (function(){
       const id = 'img'+(idSeq++);
       const item = {
         id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null,
-        included:true, rotation:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1,
+        included:true, rotation:0, straightenDeg:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1,
         hasError:false, processed:false, selectedForMerge:false, mergeOrder:null,
         overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
         mgmtNumber: afterItem.mgmtNumber || '', detectedMgmtNumber: null
@@ -4393,6 +4514,33 @@ const BRANCH_DEFAULTS = (function(){
       finalCanvas = rCanvas;
     }
 
+    // 2b. apply fine-angle straighten ("まっすぐにする", e.g. for a slightly
+    // tilted label shot) if set. This runs AFTER levels correction (so the
+    // background-brightness estimate isn't skewed by the white padding this
+    // step adds) but BEFORE manual crop/blur, so their fractions below end up
+    // relative to this straightened+padded canvas — i.e. the intended
+    // workflow is "straighten first, then crop/blur", same as the existing
+    // "manual crop is relative to pre-90°-rotation" convention above.
+    // Unlike item.rotation (90°-steps, reapplied cheaply post-hoc by
+    // applyRotation without redoing levels), an arbitrary angle can't be
+    // represented as a simple axis swap, so it's baked into baseCanvas here
+    // instead — recomputed fresh from item.straightenDeg on every
+    // process(), never destructively altering item.file.
+    const straightenDeg = clampStraightenDeg(item.straightenDeg || 0);
+    if(straightenDeg){
+      const {width: sw, height: sh} = computeStraightenedCanvasSize(finalCanvas.width, finalCanvas.height, straightenDeg);
+      const sCanvas = document.createElement('canvas');
+      sCanvas.width = sw;
+      sCanvas.height = sh;
+      const sCtx = sCanvas.getContext('2d');
+      sCtx.fillStyle = '#ffffff';
+      sCtx.fillRect(0, 0, sw, sh);
+      sCtx.translate(sw/2, sh/2);
+      sCtx.rotate(straightenDeg * Math.PI/180);
+      sCtx.drawImage(finalCanvas, -finalCanvas.width/2, -finalCanvas.height/2);
+      finalCanvas = sCanvas;
+    }
+
     // 3. apply manual crop selection if the person dragged one in the
     // fine-tune modal (fractions are relative to this stage, i.e. before
     // rotation — manual crop selection is only offered while rotation is 0)
@@ -5238,7 +5386,7 @@ const BRANCH_DEFAULTS = (function(){
       const mergedFile = new File([blob], mergedName, {type:'image/jpeg'});
       const newItem = {
         id, file:mergedFile, srcImg:null, processedCanvas:null, baseCanvas:outCanvas,
-        cachedBlob:null, included:true, rotation:0, hasError:false,
+        cachedBlob:null, included:true, rotation:0, straightenDeg:0, hasError:false,
         processed:true, selectedForMerge:false, mergeOrder:null, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
         mgmtNumber: inheritedMgmtNumber // carries over from the first selected source photo
       };
@@ -5607,6 +5755,9 @@ const BRANCH_DEFAULTS = (function(){
                                           // used to approximate live brightness changes via a CSS filter while
                                           // dragging the slider, without needing a full per-pixel recompute
   let modalPreviewBaselineBoost = 1; // same idea, but for the extra-boost slider
+  let modalPreviewBaselineStraighten = 0; // same idea, but for straightenDeg — the angle that's
+                                            // currently BAKED INTO the displayed pixels, so the live
+                                            // CSS preview only needs to add the (small) remaining delta
 
   let modalOpenSnapshot = null; // the bg-correction settings this photo had when the preview was opened —
                                   // lets "元の設定に戻す" restore them even after auto-applying changes
@@ -5632,7 +5783,7 @@ const BRANCH_DEFAULTS = (function(){
     // それまでの変更フラグを引き継ぐ。新規に開いた時だけリセットする。
     if(autoFocusMgmt) modalSessionHadMgmtChange = false;
     const ov = item.overrides || {bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null};
-    modalOpenSnapshot = {bgTarget: ov.bgTarget, colorMatch: ov.colorMatch, autoCorrect: ov.autoCorrect, extraBoost: item.extraBoost || 1};
+    modalOpenSnapshot = {bgTarget: ov.bgTarget, colorMatch: ov.colorMatch, autoCorrect: ov.autoCorrect, extraBoost: item.extraBoost || 1, straightenDeg: item.straightenDeg || 0};
 
     modalMgmtInput.value = item.mgmtNumber || '';
     modalMgmtInput.classList.toggle('filled', !!item.mgmtNumber);
@@ -5689,6 +5840,18 @@ const BRANCH_DEFAULTS = (function(){
     blurStrengthEl.value = item.blurStrength || 15;
     blurStrengthValEl.textContent = blurStrengthEl.value;
     renderBlurRegions();
+
+    // reset straighten(傾き補正)UI state for this photo — this photo's own
+    // straightenDeg is already baked into item.processedCanvas (process()
+    // re-bakes it every time), so the slider just reflects the stored value;
+    // no live transform preview should be left over from a previous photo
+    straightenSlider.value = item.straightenDeg || 0;
+    straightenValEl.textContent = (item.straightenDeg || 0).toFixed(1) + '°';
+    straightenNudgeVal.textContent = formatStraightenNudgeVal(item.straightenDeg || 0);
+    modalImg.style.transform = '';
+    modalPreviewBaselineStraighten = item.straightenDeg || 0;
+    straightenGridForced = false; // ▲▼ナッジによる強制表示は、写真を切り替えたらリセット
+    updateStraightenGridVisibility();
 
     updateModalNavButtons();
   }
@@ -5960,6 +6123,129 @@ const BRANCH_DEFAULTS = (function(){
     baCompareActive = false;
   }
 
+  // 「まっすぐにする(傾き補正)」UI。brightness系スライダーと同じ「ドラッグ中は軽量な
+  // プレビュー、離した時だけ本当の再計算」の考え方だが、こちらはbefore/after分割では
+  // なく、画像全体にCSSのrotate()を直接当てるプレビュー + 整列ガイドのグリッド重ね表示、
+  // という組み合わせにしている(傾きの確認は分割表示より格子線の方が分かりやすいため)。
+  const straightenSlider = document.getElementById('straightenSlider');
+  const straightenValEl = document.getElementById('straightenVal');
+  const straightenResetBtn = document.getElementById('straightenResetBtn');
+  const straightenGridToggle = document.getElementById('straightenGridToggle');
+  const straightenGrid = document.getElementById('straightenGrid');
+  const straightenSectionBody = document.getElementById('straightenSectionBody');
+  const straightenNudgeUp = document.getElementById('straightenNudgeUp');
+  const straightenNudgeDown = document.getElementById('straightenNudgeDown');
+  const straightenNudgeResetBtn = document.getElementById('straightenNudgeResetBtn');
+  const straightenNudgeVal = document.getElementById('straightenNudgeVal');
+  const STRAIGHTEN_NUDGE_STEP = 0.5;
+  // 90度回転ボタンの横の▲▼(0.5度刻みのクイック補正)を一度でも使ったら、
+  // 「まっすぐにする」セクションを開かなくてもグリッドを見せ続ける(この写真を開いている間だけ)
+  let straightenGridForced = false;
+  function formatStraightenNudgeVal(deg){
+    const n = deg || 0;
+    return (n > 0 ? '+' : '') + n.toFixed(1) + '°';
+  }
+
+  // positionBeforeAfterDivider()と同じ考え方で、modalImgの実際の表示矩形(画像の
+  // アスペクト比によってmodalPreviewBox内でのレターボックスが変わる)に合わせて
+  // グリッドの位置・サイズを揃える。before/after用の仕組みと同様、ここでも
+  // window resizeへの追従は行わない(既存のpositionBeforeAfterDividerも同じ制限)。
+  function positionStraightenGrid(){
+    const imgRect = modalImg.getBoundingClientRect();
+    const boxRect = modalPreviewBox.getBoundingClientRect();
+    straightenGrid.style.left = (imgRect.left - boxRect.left) + 'px';
+    straightenGrid.style.top = (imgRect.top - boxRect.top) + 'px';
+    straightenGrid.style.width = imgRect.width + 'px';
+    straightenGrid.style.height = imgRect.height + 'px';
+  }
+
+  // グリッドは「傾き補正」セクションを開いている間だけ(かつチェックが入っている時だけ)表示。
+  // セクションを閉じた後にグリッドだけ残ってしまうのを防ぐため、セクションの開閉トグル・
+  // チェックボックスの両方からこの関数を呼ぶ。
+  function updateStraightenGridVisibility(){
+    const shouldShow = !!(straightenGridToggle.checked && (straightenSectionBody.classList.contains('open') || straightenGridForced));
+    if(!shouldShow){
+      straightenGrid.style.display = 'none';
+      return;
+    }
+    // modalImg.srcが差し替えられた直後は、まだデコードが終わっていないことがあり
+    // (renderBlurRegions()のblur範囲と同じ理由)、その状態で測ると0×0になってしまう
+    if(!modalImg.complete || modalImg.naturalWidth === 0){
+      modalImg.addEventListener('load', function onLoad(){
+        modalImg.removeEventListener('load', onLoad);
+        updateStraightenGridVisibility();
+      });
+      return;
+    }
+    positionStraightenGrid();
+    straightenGrid.classList.toggle('fine', straightenGridForced); // ▲▼での微調整中はより細かい格子に
+    straightenGrid.style.display = 'block';
+  }
+
+  straightenSlider.addEventListener('input', ()=>{
+    const deg = parseFloat(straightenSlider.value) || 0;
+    straightenValEl.textContent = deg.toFixed(1) + '°';
+    // ドラッグ中は本当の再処理(白パディング付きキャンバスの再描画)をせず、表示中の
+    // 画像(=modalPreviewBaselineStraighten度が既に焼き込まれた画素)に対して、
+    // 「今欲しい角度との差分」だけをCSS回転で載せる軽い近似プレビューにする
+    const delta = deg - modalPreviewBaselineStraighten;
+    modalImg.style.transform = delta ? `rotate(${delta}deg)` : '';
+    if(straightenGridToggle.checked) positionStraightenGrid();
+  });
+  straightenSlider.addEventListener('change', ()=>{
+    if(!modalItem) return;
+    const deg = clampStraightenDeg(parseFloat(straightenSlider.value) || 0);
+    straightenSlider.value = deg;
+    straightenValEl.textContent = deg.toFixed(1) + '°';
+    straightenNudgeVal.textContent = formatStraightenNudgeVal(deg);
+    modalItem.straightenDeg = deg;
+    reprocessModalItem();
+  });
+  straightenResetBtn.addEventListener('click', ()=>{
+    straightenSlider.value = 0;
+    straightenValEl.textContent = '0.0°';
+    straightenNudgeVal.textContent = formatStraightenNudgeVal(0);
+    modalImg.style.transform = '';
+    if(!modalItem) return;
+    modalItem.straightenDeg = 0;
+    reprocessModalItem();
+  });
+  straightenGridToggle.addEventListener('change', updateStraightenGridVisibility);
+
+  // 90度回転ボタンの右に並べた▲▼/リセット。モーダルの「まっすぐにする」セクションを
+  // 開かずに、写真を見ながら0.5度刻みでサッと補正できるようにするためのショートカット。
+  // スライダー・セクション内のリセットボタンと同じ最終状態に揃えるための共通処理。
+  function applyStraightenDegQuick(deg){
+    if(!modalItem) return;
+    const current = modalItem.straightenDeg || 0;
+    if(deg === current) return;
+    // 進行中の未確定トリミング範囲は、今の向きに対するスクリーン座標で測っているため、
+    // 回転すると位置が合わなくなる。90度回転ボタンと同じ理由でキャンセルしておく
+    if(cropModeActive) cropCancelBtn.click();
+    straightenSlider.value = deg;
+    straightenValEl.textContent = deg.toFixed(1) + '°';
+    straightenNudgeVal.textContent = formatStraightenNudgeVal(deg);
+    modalItem.straightenDeg = deg;
+    // 即時の見た目フィードバック(本処理が終わるまでの軽い近似プレビュー)
+    const cssDelta = deg - modalPreviewBaselineStraighten;
+    modalImg.style.transform = cssDelta ? `rotate(${cssDelta}deg)` : '';
+    // ▲▼/リセットを使ったという事は、グリッドと見比べたいという意思表示なので、
+    // セクションを開いていなくても(チェックが外れていても)グリッドを出す
+    straightenGridToggle.checked = true;
+    straightenGridForced = true;
+    updateStraightenGridVisibility();
+    reprocessModalItem();
+  }
+  straightenNudgeUp.addEventListener('click', ()=>{
+    if(!modalItem) return;
+    applyStraightenDegQuick(clampStraightenDeg((modalItem.straightenDeg || 0) + STRAIGHTEN_NUDGE_STEP));
+  });
+  straightenNudgeDown.addEventListener('click', ()=>{
+    if(!modalItem) return;
+    applyStraightenDegQuick(clampStraightenDeg((modalItem.straightenDeg || 0) - STRAIGHTEN_NUDGE_STEP));
+  });
+  straightenNudgeResetBtn.addEventListener('click', ()=> applyStraightenDegQuick(0));
+
   function applyLivePreviewFilter(){
     startBeforeAfterCompare();
     // Cheap approximation of what the real recompute would produce, so the
@@ -6114,7 +6400,10 @@ const BRANCH_DEFAULTS = (function(){
       if(modalItem === targetItem){
         modalImg.src = getModalDisplayDataUrl(targetItem.processedCanvas);
         modalImg.style.filter = ''; // the new image already reflects the real computation — drop the approximation
+        modalImg.style.transform = ''; // same for the straighten live-rotate approximation — it's now baked into the pixels
+        modalPreviewBaselineStraighten = targetItem.straightenDeg || 0; // this is the angle now actually baked into the pixels above
         endBeforeAfterCompare();
+        updateStraightenGridVisibility(); // the straightened canvas can have a different aspect ratio, so re-measure
         modalPreviewBaselineTarget = (targetItem.appliedInfo && targetItem.appliedInfo.mode === 'bg') ? targetItem.appliedInfo.target : modalPreviewBaselineTarget;
         updateSafetyNetWarning(modalPreviewBaselineTarget);
         modalPreviewBaselineBoost = targetItem.extraBoost || 1;
@@ -6151,9 +6440,14 @@ const BRANCH_DEFAULTS = (function(){
     modalItem.overrides.colorMatch = modalOpenSnapshot.colorMatch;
     modalItem.overrides.autoCorrect = modalOpenSnapshot.autoCorrect;
     modalItem.extraBoost = modalOpenSnapshot.extraBoost || 1;
+    modalItem.straightenDeg = modalOpenSnapshot.straightenDeg || 0;
     syncModalControlsFromOverrides(modalOpenSnapshot);
     extraBoostEl.value = modalItem.extraBoost;
     extraBoostValEl.textContent = parseFloat(extraBoostEl.value).toFixed(2) + '倍';
+    straightenSlider.value = modalItem.straightenDeg;
+    straightenValEl.textContent = modalItem.straightenDeg.toFixed(1) + '°';
+    straightenNudgeVal.textContent = formatStraightenNudgeVal(modalItem.straightenDeg);
+    modalImg.style.transform = '';
     reprocessModalItem();
   }
 
@@ -7071,6 +7365,10 @@ const BRANCH_DEFAULTS = (function(){
       toggle.classList.toggle('open', open);
     });
   }
+  setupSectionToggle('straightenSectionToggle', 'straightenSectionBody');
+  // setupSectionToggleはclassList.toggle()を同期的に行うので、直後に呼べば
+  // 開閉した「後」の状態を見てグリッドの表示/非表示を判定できる
+  document.getElementById('straightenSectionToggle').addEventListener('click', updateStraightenGridVisibility);
   setupSectionToggle('cropSectionToggle', 'cropSectionBody');
   setupSectionToggle('blurSectionToggle', 'blurSectionBody');
 
