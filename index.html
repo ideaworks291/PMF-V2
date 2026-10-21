@@ -4149,25 +4149,29 @@ const BRANCH_DEFAULTS = (function(){
     ]);
   }
 
-  // heic2any is only fetched/parsed the first time it's actually needed,
+  // heic-to is only fetched/parsed the first time it's actually needed,
   // instead of on every page load, so its own startup quirks don't affect
   // people who never touch a HEIC file.
-  let heic2anyLoadPromise = null;
-  function ensureHeic2anyLoaded(){
-    if(window.heic2any) return Promise.resolve();
-    if(heic2anyLoadPromise) return heic2anyLoadPromise;
-    heic2anyLoadPromise = new Promise((resolve, reject)=>{
+  // (以前はheic2any@0.0.4を使っていたが、内部のlibheifが何年も前のバージョンに
+  // 固定されたまま更新が止まっており、新しめのiPhoneのHEICバリエーションの一部を
+  // デコードできなかった。heic-toは同じ系統のラッパーだがlibheifの新しいリリースに
+  // 継続的に追従しているため、こちらに差し替えて対応範囲を広げる。)
+  let heicToLoadPromise = null;
+  function ensureHeicToLoaded(){
+    if(window.HeicTo) return Promise.resolve();
+    if(heicToLoadPromise) return heicToLoadPromise;
+    heicToLoadPromise = new Promise((resolve, reject)=>{
       const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+      s.src = 'https://cdn.jsdelivr.net/npm/heic-to@1.6.6/dist/iife/heic-to.js';
       s.crossOrigin = 'anonymous';
       s.onload = ()=>resolve();
       s.onerror = ()=>{
-        heic2anyLoadPromise = null;
-        reject(new Error('heic2anyライブラリの読み込みに失敗しました'));
+        heicToLoadPromise = null;
+        reject(new Error('heic-toライブラリの読み込みに失敗しました'));
       };
       document.head.appendChild(s);
     });
-    return heic2anyLoadPromise;
+    return heicToLoadPromise;
   }
 
   // Decodes item.file into a working-resolution bitmap/canvas. Used both for
@@ -4183,16 +4187,26 @@ const BRANCH_DEFAULTS = (function(){
       bitmap = null;
     }
 
-    // 2) fall back to heic2any only if native decode failed and file looks like HEIC
+    // 2) fall back to heic-to only if native decode failed and file looks like HEIC
     if(!bitmap && isHeic(item.file)){
       setStatusLabel(item, 'HEIC変換中…');
-      await ensureHeic2anyLoaded();
-      const result = await withTimeout(
-        heic2any({ blob: item.file, toType: 'image/jpeg', quality: 0.92 }),
-        20000
-      );
-      const blob = Array.isArray(result) ? result[0] : result;
-      bitmap = await createImageBitmap(blob);
+      await ensureHeicToLoaded();
+      try{
+        const result = await withTimeout(
+          HeicTo({ blob: item.file, type: 'image/jpeg', quality: 0.92 }),
+          20000
+        );
+        const blob = Array.isArray(result) ? result[0] : result;
+        bitmap = await createImageBitmap(blob);
+      }catch(e){
+        // ブラウザ標準デコードに続いて、WASM版デコーダー(heic-to)でも読めなかった
+        // ＝このHEICのバリエーション自体に対応できていない、ということ。
+        // ライブラリ内部のエラー文言(libheifのバージョンで変わりうる)に依存せず
+        // 判定できるよう、ここで明示的にフラグを立てて投げ直す。
+        const err = new Error((e && e.message) ? e.message : String(e));
+        err.heicUnsupported = true;
+        throw err;
+      }
     }
 
     if(!bitmap){
@@ -4308,8 +4322,8 @@ const BRANCH_DEFAULTS = (function(){
     }catch(err){
       console.error('decode failed:', item.file.name, err);
       const msg = (err && err.message) ? err.message : String(err);
-      if(msg.includes('LIBHEIF') || msg.includes('format not supported') || msg.includes('Script error')){
-        markError(item, 'この写真のHEIC形式には対応できません(新しめのiPhoneに多い既知の制限)。写真Appで対象を選択→共有→「ファイルコピーを送信」でJPEGとして書き出し、そちらを読み込んでください。');
+      if(err && err.heicUnsupported){
+        markError(item, 'この写真のHEIC形式には対応できません(新しめのiPhoneに多い既知の制限)。写真Appでこの写真を開き、共有→「写真をコピー」→「ファイル」Appの「このiPhone内」で空いた場所を長押し→「ペースト」するとJPEGとして保存されるので、そちらを読み込んでください。');
       }else if(isHeic(item.file)){
         markError(item, 'HEIC変換に失敗しました: ' + msg);
       }else{
@@ -4940,7 +4954,7 @@ const BRANCH_DEFAULTS = (function(){
       // item.srcImg is the SAME original file already decoded moments ago
       // by decodeToWorkingBitmap() (at 1800px) — reuse that instead of
       // decoding item.file from scratch a second time. createImageBitmap on
-      // a full-resolution camera photo (and especially the heic2any
+      // a full-resolution camera photo (and especially the heic-to
       // conversion it can trigger for HEIC) is genuinely expensive, so
       // doing it twice per photo was pure waste; downscaling an
       // already-decoded bitmap is comparatively very cheap.
