@@ -458,10 +458,12 @@ const BRANCH_DEFAULTS = (function(){
     return regions.map(r => regionsMatch(r, region)).lastIndexOf(true);
   }
 
-  // 「まっすぐにする(傾き補正)」で安全に許可する角度の範囲(度)。
-  // ラベル撮影時のちょっとした傾きを直す用途を想定しており、大きく回したい場合は
-  // 従来通り90度単位の回転ボタンを使う想定なので、ここは控えめな範囲にしてある。
-  const STRAIGHTEN_MAX_DEG = 15;
+  // 「まっすぐにする(傾き補正)」で許可する角度の範囲(度)。
+  // どんな角度の傾きも「最も近い90度単位の向き」+「±45度以内の端数」に分解できるので
+  // (例: 実際の傾きが100度なら、90度回転ボタン+10度の端数で再現できる)、
+  // ここを45度まで広げておけば、従来の90度単位の回転ボタンと組み合わせて
+  // 実質どんな角度のズレにも対応できる。
+  const STRAIGHTEN_MAX_DEG = 45;
 
   // スライダー等からの入力値を、安全な範囲(±STRAIGHTEN_MAX_DEG度)・0.1度刻みに丸める。
   function clampStraightenDeg(deg){
@@ -2768,8 +2770,8 @@ const BRANCH_DEFAULTS = (function(){
             <span class="hint">ラベル撮影時の傾きなど</span>
           </button>
           <div class="section-body" id="straightenSectionBody">
-            <div class="valline"><span>-15°</span><span id="straightenVal">0.0°</span><span>+15°</span></div>
-            <input type="range" id="straightenSlider" min="-15" max="15" step="0.1" value="0">
+            <div class="valline"><span>-45°</span><span id="straightenVal">0.0°</span><span>+45°</span></div>
+            <input type="range" id="straightenSlider" min="-45" max="45" step="0.1" value="0">
             <div class="btnrow" style="margin-top:10px;">
               <button id="straightenResetBtn" type="button">0度に戻す</button>
             </div>
@@ -7447,6 +7449,16 @@ const BRANCH_DEFAULTS = (function(){
     }
     // let other controls in this box handle their own hover/click instead
     if(e.target.closest && e.target.closest('.modal-rotate, .crop-confirm-bar, .blur-region')){
+      hideCtrlCropPreview();
+      return;
+    }
+    // 傾き補正のスライダーをドラッグ中/▲▼ナッジ直後は、本処理が終わるまでの
+    // 軽い近似プレビューとしてmodalImgに一時的なCSS rotate()がかかっている。
+    // その間にgetBoundingClientRect()を読むと、回転した分だけ外接矩形が
+    // 膨らんだ値を拾ってしまい、この赤枠プレビューの位置・大きさがガクガクと
+    // 揺れて点滅して見える。本処理が終わればtransformは自動的に外れるので、
+    // それまでは素直に隠しておく(最終的なトリミング自体はそちらの値を使わないので影響なし)。
+    if(modalImg.style.transform){
       hideCtrlCropPreview();
       return;
     }
