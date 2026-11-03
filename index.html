@@ -2496,6 +2496,17 @@ const BRANCH_DEFAULTS = (function(){
 </style>
 </head>
 <body>
+<!-- 色味補正スライダーのドラッグ中プレビュー用。feColorMatrixでR/Bチャンネルを
+     加減算する行列を組み、本処理と全く同じ計算を(本処理が終わる前に)CSS filterで
+     近似ではなく正確に再現する。color-interpolation-filters="sRGB"を指定しないと
+     ブラウザ既定のlinearRGB色空間で計算されてしまい、0-255の単純な加減算と合わなくなる。 -->
+<svg width="0" height="0" style="position:absolute;overflow:hidden;" aria-hidden="true">
+  <defs>
+    <filter id="colorBalancePreviewFilter" color-interpolation-filters="sRGB">
+      <feColorMatrix id="colorBalancePreviewMatrix" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"/>
+    </filter>
+  </defs>
+</svg>
 <div id="app-version-badge" style="position:fixed;bottom:4px;right:8px;font-size:10px;color:#999;opacity:0.55;pointer-events:none;z-index:9999;font-family:monospace;">v2026.08.25</div>
 <div class="wrap">
 
@@ -2845,6 +2856,14 @@ const BRANCH_DEFAULTS = (function(){
           <label>追加の明るさブースト<i class="info-tip" title="自動補正を目一杯かけても、まだ暗い場合に手動でさらに明るくします。白飛びの安全装置は働かないので、様子を見ながら調整してください。">?</i></label>
           <div class="valline"><span>なし</span><span id="extraBoostVal">1.0倍</span><span>強め</span></div>
           <input type="range" id="extraBoost" min="1" max="2.5" step="0.05" value="1">
+        </div>
+        <div class="ctrl">
+          <label>色味補正(ホワイトバランス)<i class="info-tip" title="背景の色みを揃える自動補正だけでは、青みなどの色かぶりが取り切れない時に、この写真だけ最後に手動で暖色/寒色方向へ補正します。">?</i></label>
+          <div class="valline"><span>寒色(青)</span><span id="colorBalanceVal">±0</span><span>暖色(オレンジ)</span></div>
+          <input type="range" id="colorBalance" min="-40" max="40" step="1" value="0">
+          <div class="btnrow" style="margin-top:8px;">
+            <button id="colorBalanceResetBtn" type="button">色味補正を0に戻す</button>
+          </div>
         </div>
         <div class="btnrow">
           <button id="modalApplyBtn" type="button">元の設定に戻す</button>
@@ -3340,7 +3359,7 @@ const BRANCH_DEFAULTS = (function(){
     mgmtAutoAssignRanForThisBatch = false;
     files.forEach(f=>{
       const id = 'img'+(idSeq++);
-      const item = {id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null, included:true, rotation:0, straightenDeg:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null}};
+      const item = {id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null, included:true, rotation:0, straightenDeg:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, colorBalance:0, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null}};
       const restored = detectMgmtNumberFromFilename(f.name);
       if(restored){
         item.mgmtNumber = restored.number;
@@ -3397,7 +3416,7 @@ const BRANCH_DEFAULTS = (function(){
     const newItem = {
       id, file: sourceItem.file, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null,
       included:true, rotation: sourceItem.rotation || 0, straightenDeg: sourceItem.straightenDeg || 0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15,
-      extraBoost:1, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null,
+      extraBoost:1, colorBalance:0, hasError:false, processed:false, selectedForMerge:false, mergeOrder:null,
       overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
       mgmtNumber: sourceItem.mgmtNumber || '', detectedMgmtNumber: null
     };
@@ -3497,7 +3516,7 @@ const BRANCH_DEFAULTS = (function(){
       const id = 'img'+(idSeq++);
       const item = {
         id, file:f, srcImg:null, processedCanvas:null, baseCanvas:null, cachedBlob:null,
-        included:true, rotation:0, straightenDeg:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1,
+        included:true, rotation:0, straightenDeg:0, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, colorBalance:0,
         hasError:false, processed:false, selectedForMerge:false, mergeOrder:null,
         overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
         mgmtNumber: afterItem.mgmtNumber || '', detectedMgmtNumber: null
@@ -4455,6 +4474,7 @@ const BRANCH_DEFAULTS = (function(){
       item.blurStrength = 15;
       item.rotation = 0;
       item.extraBoost = 1;
+      item.colorBalance = 0;
       item.overrides = {bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null};
     }
     setStatusLabel(item, '再読み込み中…');
@@ -4508,6 +4528,21 @@ const BRANCH_DEFAULTS = (function(){
         d[i]   = Math.min(255, d[i]   * extraBoost);
         d[i+1] = Math.min(255, d[i+1] * extraBoost);
         d[i+2] = Math.min(255, d[i+2] * extraBoost);
+      }
+    }
+
+    // 1c. optional manual色味補正(ホワイトバランス)。背景色に合わせる自動補正
+    // (colorMatch)はあくまで「推定した背景色」基準なので、それでも青みなどの
+    // 色かぶりが残るケースのための、この写真だけの最終手動調整。
+    // 正の値ほど暖色(赤を上げて青を下げる)、負の値ほど寒色(逆)に振る、
+    // 単純なR/Bチャンネルの加減算(Gはそのまま)。乗算ではなく加算にしているのは、
+    // 明るさ(extraBoost)への影響を最小限にして「色味だけ」動かすため。
+    const colorBalance = item.colorBalance || 0;
+    if(colorBalance){
+      const d = imgData.data;
+      for(let i=0;i<d.length;i+=4){
+        d[i]   = Math.min(255, Math.max(0, d[i]   + colorBalance));
+        d[i+2] = Math.min(255, Math.max(0, d[i+2] - colorBalance));
       }
     }
 
@@ -5403,7 +5438,7 @@ const BRANCH_DEFAULTS = (function(){
       const newItem = {
         id, file:mergedFile, srcImg:null, processedCanvas:null, baseCanvas:outCanvas,
         cachedBlob:null, included:true, rotation:0, straightenDeg:0, hasError:false,
-        processed:true, selectedForMerge:false, mergeOrder:null, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
+        processed:true, selectedForMerge:false, mergeOrder:null, manualCrop:null, cropRounds:0, blurRegions:[], blurStrength:15, extraBoost:1, colorBalance:0, overrides:{bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null},
         mgmtNumber: inheritedMgmtNumber // carries over from the first selected source photo
       };
       items.push(newItem);
@@ -5603,6 +5638,34 @@ const BRANCH_DEFAULTS = (function(){
     modalItem.extraBoost = parseFloat(extraBoostEl.value) || 1;
     reprocessModalItem();
   });
+
+  const colorBalanceEl = document.getElementById('colorBalance');
+  const colorBalanceValEl = document.getElementById('colorBalanceVal');
+  const colorBalanceResetBtn = document.getElementById('colorBalanceResetBtn');
+  const colorBalancePreviewMatrixEl = document.getElementById('colorBalancePreviewMatrix');
+  function formatColorBalanceVal(n){
+    const v = n || 0;
+    if(!v) return '±0';
+    return (v>0?'+':'') + v;
+  }
+  colorBalanceEl.addEventListener('input', ()=>{
+    colorBalanceValEl.textContent = formatColorBalanceVal(parseFloat(colorBalanceEl.value)||0);
+    applyLivePreviewFilter();
+  });
+  colorBalanceEl.addEventListener('change', ()=>{
+    if(!modalItem) return;
+    modalItem.colorBalance = parseFloat(colorBalanceEl.value) || 0;
+    reprocessModalItem();
+  });
+  colorBalanceResetBtn.addEventListener('click', ()=>{
+    if(!modalItem) return;
+    colorBalanceEl.value = 0;
+    colorBalanceValEl.textContent = formatColorBalanceVal(0);
+    applyLivePreviewFilter(); // ドラッグ中と同じ経路で、即座に「0に戻った」見た目を反映
+    modalItem.colorBalance = 0;
+    reprocessModalItem();
+  });
+
   modalColorMatchEl.addEventListener('change', ()=>{
     // this is a discrete on/off toggle (not a continuous drag like the
     // slider), and there's no honest simple CSS-filter approximation for
@@ -5774,9 +5837,19 @@ const BRANCH_DEFAULTS = (function(){
   let modalPreviewBaselineStraighten = 0; // same idea, but for straightenDeg — the angle that's
                                             // currently BAKED INTO the displayed pixels, so the live
                                             // CSS preview only needs to add the (small) remaining delta
+  let modalPreviewBaselineColorBalance = 0; // same idea, but for the色味補正(ホワイトバランス)スライダー
 
   let modalOpenSnapshot = null; // the bg-correction settings this photo had when the preview was opened —
                                   // lets "元の設定に戻す" restore them even after auto-applying changes
+
+  // item._lastGoodModalState (same shape as modalOpenSnapshot) is kept ON EACH ITEM — not as a single
+  // shared variable — and refreshed after every SUCCESSFUL reprocess (not just at open time). If a later
+  // reprocess for that same item fails (e.g. its original file can no longer be read because its SD card
+  // was removed — see reprocessModalItem's catch/!ok path below), this is what we roll that item's
+  // in-memory settings back to, since its baseCanvas/processedCanvas still reflect exactly this state
+  // (process() never got to run, so nothing was actually lost). Keeping it per-item rather than in one
+  // shared variable also makes the rollback correct even if the person has already navigated to a
+  // different photo by the time a slow reprocess for the old one finishes failing.
 
   function syncModalControlsFromOverrides(ov){
     if(ov.bgTarget != null){
@@ -5799,7 +5872,8 @@ const BRANCH_DEFAULTS = (function(){
     // それまでの変更フラグを引き継ぐ。新規に開いた時だけリセットする。
     if(autoFocusMgmt) modalSessionHadMgmtChange = false;
     const ov = item.overrides || {bgTarget:null, headroom:null, colorMatch:null, autoCorrect:null};
-    modalOpenSnapshot = {bgTarget: ov.bgTarget, colorMatch: ov.colorMatch, autoCorrect: ov.autoCorrect, extraBoost: item.extraBoost || 1, straightenDeg: item.straightenDeg || 0};
+    modalOpenSnapshot = {bgTarget: ov.bgTarget, colorMatch: ov.colorMatch, autoCorrect: ov.autoCorrect, extraBoost: item.extraBoost || 1, straightenDeg: item.straightenDeg || 0, colorBalance: item.colorBalance || 0};
+    item._lastGoodModalState = {...modalOpenSnapshot}; // at open time, the displayed processedCanvas reflects exactly this state
 
     modalMgmtInput.value = item.mgmtNumber || '';
     modalMgmtInput.classList.toggle('filled', !!item.mgmtNumber);
@@ -5825,6 +5899,8 @@ const BRANCH_DEFAULTS = (function(){
     syncModalControlsFromOverrides(ov);
     extraBoostEl.value = item.extraBoost || 1;
     extraBoostValEl.textContent = parseFloat(extraBoostEl.value).toFixed(2) + '倍';
+    colorBalanceEl.value = item.colorBalance || 0;
+    colorBalanceValEl.textContent = formatColorBalanceVal(item.colorBalance || 0);
 
     modalImg.src = getModalDisplayDataUrl(item.processedCanvas);
     modalImg.style.filter = ''; // clear any live-preview approximation left over from a previous photo
@@ -5832,6 +5908,7 @@ const BRANCH_DEFAULTS = (function(){
     modalPreviewBaselineTarget = (item.appliedInfo && item.appliedInfo.mode === 'bg') ? item.appliedInfo.target : parseInt(modalBgOverride.value,10) || 150;
     updateSafetyNetWarning(modalPreviewBaselineTarget);
     modalPreviewBaselineBoost = item.extraBoost || 1;
+    modalPreviewBaselineColorBalance = item.colorBalance || 0;
     modalOverlay.style.display = 'flex';
 
     // reset crop-selection UI state for this photo
@@ -6299,7 +6376,21 @@ const BRANCH_DEFAULTS = (function(){
     const boostRatio = boost / (modalPreviewBaselineBoost || 1);
     const combined = targetRatio * boostRatio;
     const clamped = Math.max(0.3, Math.min(4, combined));
-    modalImg.style.filter = `brightness(${clamped.toFixed(3)})`;
+    let filterStr = `brightness(${clamped.toFixed(3)})`;
+
+    // 色味補正は明るさと違って単純な乗算近似が効かない(Rだけ上げてBだけ下げる、
+    // というチャンネル別の加減算なので)。幸い、本処理と全く同じ計算をSVGの
+    // feColorMatrixで表現できるので、ここは「近似」ではなく実際の計算をそのまま
+    // CSS filterに反映している。差分(delta)だけを反映するのは他のスライダーと同じ理屈:
+    // 今表示されているピクセルには、すでにmodalPreviewBaselineColorBalance分が
+    // 焼き込まれているので、そこからの変化量だけをfilterで追加すればよい。
+    const cbDelta = (parseFloat(colorBalanceEl.value)||0) - modalPreviewBaselineColorBalance;
+    if(cbDelta){
+      const off = cbDelta/255;
+      colorBalancePreviewMatrixEl.setAttribute('values', `1 0 0 0 ${off.toFixed(4)}  0 1 0 0 0  0 0 1 0 ${(-off).toFixed(4)}  0 0 0 1 0`);
+      filterStr += ' url(#colorBalancePreviewFilter)';
+    }
+    modalImg.style.filter = filterStr;
   }
 
   modalBgOverride.addEventListener('input', ()=>{
@@ -6405,14 +6496,29 @@ const BRANCH_DEFAULTS = (function(){
       const ok = await ensureSrcImgLoaded(targetItem);
       if(myToken !== reprocessToken) return; // a newer reprocess started meanwhile — its result wins instead
       if(!ok){
-        markError(targetItem, 'この写真の再読み込みに失敗しました。もう一度読み込み直してください。');
-        if(modalItem === targetItem) closeFineTuneModal();
-        return;
+        // item.file自体が読めなくなっている(複数のSDカードを順に差し替えて読み込んだ後、
+        // 最初の方のSDカードを抜いてしまった状態など)。baseCanvas/processedCanvasはまだ
+        // 直前の正常な結果のままなので、ここでmarkError()して除外してしまうのは誤り
+        // ("編集しようとしただけ"で、既に出来上がっていた写真まで失われてしまう)。
+        // 代わりに、今回変更しようとした設定だけを直前の正常な状態まで巻き戻す。
+        const err = new Error('元の写真データを再読み込みできませんでした');
+        err.sourceUnreadable = true;
+        throw err;
       }
       await process(targetItem);
       await cacheProcessedResult(targetItem);
       if(myToken !== reprocessToken) return; // superseded while processing — don't clobber the newer result
       releaseSrcImg(targetItem);
+      // 今回の再処理が無事成功し、processedCanvasに反映された設定を「直前の正常な状態」として記録。
+      // 次回の再処理がsourceUnreadableで失敗した時は、ここまで巻き戻す。
+      targetItem._lastGoodModalState = {
+        bgTarget: targetItem.overrides.bgTarget,
+        colorMatch: targetItem.overrides.colorMatch,
+        autoCorrect: targetItem.overrides.autoCorrect,
+        extraBoost: targetItem.extraBoost || 1,
+        straightenDeg: targetItem.straightenDeg || 0,
+        colorBalance: targetItem.colorBalance || 0
+      };
       if(modalItem === targetItem){
         modalImg.src = getModalDisplayDataUrl(targetItem.processedCanvas);
         modalImg.style.filter = ''; // the new image already reflects the real computation — drop the approximation
@@ -6423,6 +6529,7 @@ const BRANCH_DEFAULTS = (function(){
         modalPreviewBaselineTarget = (targetItem.appliedInfo && targetItem.appliedInfo.mode === 'bg') ? targetItem.appliedInfo.target : modalPreviewBaselineTarget;
         updateSafetyNetWarning(modalPreviewBaselineTarget);
         modalPreviewBaselineBoost = targetItem.extraBoost || 1;
+        modalPreviewBaselineColorBalance = targetItem.colorBalance || 0;
         renderBlurRegions();
         const infoLabel = document.getElementById('modalInfoLabel');
         if(infoLabel){
@@ -6439,8 +6546,22 @@ const BRANCH_DEFAULTS = (function(){
     }catch(err){
       if(myToken !== reprocessToken) return; // don't surface an error for a run that's already been superseded
       console.error('fine-tune reprocess error:', targetItem.file.name, err);
-      markError(targetItem, '再処理に失敗しました: ' + err.message);
-      if(modalItem === targetItem) closeFineTuneModal();
+      targetItem.cardEl.classList.remove('processing'); // process()が走らなかった分、ここで自分で外す
+      // 直前の正常な状態(_lastGoodModalState)まで設定を巻き戻す。baseCanvas/processedCanvasは
+      // 最初から一度も書き換えていないので、この写真はこれまで通り(included状態も)維持される。
+      // _lastGoodModalStateが無い(=一度も正常に処理できたことがない)場合は巻き戻す先が無いので、
+      // やむを得ず従来通り除外する。
+      if(targetItem._lastGoodModalState){
+        restoreModalControlsFromSnapshot(targetItem._lastGoodModalState, targetItem);
+        if(err && err.sourceUnreadable){
+          alert('元の写真データ(SDカードなど)に再アクセスできなくなっているため、この変更は適用できませんでした。\n\nこの写真自体はこれまでの状態のまま変更されていません(除外されていません)。編集を続けるには、このSDカードを挿し直してからもう一度操作してください。\n\n※ SDカードを入れ替えながら読み込む場合は、そのSDカードの写真の編集が全て終わるまでは抜かないようにすると、この問題を避けられます。');
+        }else{
+          alert('再処理に失敗しました: ' + err.message + '\n\nこの写真自体はこれまでの状態のまま変更されていません。');
+        }
+      }else{
+        markError(targetItem, '再処理に失敗しました: ' + err.message);
+        if(modalItem === targetItem) closeFineTuneModal();
+      }
     }finally{
       if(myToken === reprocessToken){
         applyBtn.disabled = false;
@@ -6449,21 +6570,34 @@ const BRANCH_DEFAULTS = (function(){
     }
   }
 
+  // modalItem.straightenDeg/extraBoost/overridesと、モーダルのUIコントロール表示を
+  // 丸ごとsnapshotの内容に合わせ直す（実際の再処理はしない。呼び出し側の責任）。
+  // 「元の設定に戻す」ボタン(modalOpenSnapshot宛)と、再処理失敗時のロールバック
+  // (modalLastGoodState宛 — reprocessModalItem参照)の2か所で使う共通処理。
+  function restoreModalControlsFromSnapshot(snapshot, targetItem){
+    targetItem.overrides = targetItem.overrides || {};
+    targetItem.overrides.bgTarget = snapshot.bgTarget;
+    targetItem.overrides.colorMatch = snapshot.colorMatch;
+    targetItem.overrides.autoCorrect = snapshot.autoCorrect;
+    targetItem.extraBoost = snapshot.extraBoost || 1;
+    targetItem.straightenDeg = snapshot.straightenDeg || 0;
+    targetItem.colorBalance = snapshot.colorBalance || 0;
+    if(modalItem === targetItem){
+      syncModalControlsFromOverrides(snapshot);
+      extraBoostEl.value = targetItem.extraBoost;
+      extraBoostValEl.textContent = parseFloat(extraBoostEl.value).toFixed(2) + '倍';
+      straightenSlider.value = targetItem.straightenDeg;
+      straightenValEl.textContent = targetItem.straightenDeg.toFixed(1) + '°';
+      straightenNudgeVal.textContent = formatStraightenNudgeVal(targetItem.straightenDeg);
+      colorBalanceEl.value = targetItem.colorBalance;
+      colorBalanceValEl.textContent = formatColorBalanceVal(targetItem.colorBalance);
+      modalImg.style.transform = '';
+    }
+  }
+
   function revertModalToOpenState(){
     if(!modalItem || !modalOpenSnapshot) return;
-    modalItem.overrides = modalItem.overrides || {};
-    modalItem.overrides.bgTarget = modalOpenSnapshot.bgTarget;
-    modalItem.overrides.colorMatch = modalOpenSnapshot.colorMatch;
-    modalItem.overrides.autoCorrect = modalOpenSnapshot.autoCorrect;
-    modalItem.extraBoost = modalOpenSnapshot.extraBoost || 1;
-    modalItem.straightenDeg = modalOpenSnapshot.straightenDeg || 0;
-    syncModalControlsFromOverrides(modalOpenSnapshot);
-    extraBoostEl.value = modalItem.extraBoost;
-    extraBoostValEl.textContent = parseFloat(extraBoostEl.value).toFixed(2) + '倍';
-    straightenSlider.value = modalItem.straightenDeg;
-    straightenValEl.textContent = modalItem.straightenDeg.toFixed(1) + '°';
-    straightenNudgeVal.textContent = formatStraightenNudgeVal(modalItem.straightenDeg);
-    modalImg.style.transform = '';
+    restoreModalControlsFromSnapshot(modalOpenSnapshot, modalItem);
     reprocessModalItem();
   }
 
